@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 회의록 요약기</title>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        .result-area { margin-top: 30px; display: none; }
+        .box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 8px; white-space: pre-wrap; margin-bottom: 20px; }
+        #loading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🎙️ AI 회의록 요약 서비스</h2>
+        <p>음성 파일(wav, mp3 등)을 업로드하면 텍스트 변환과 요약을 한 번에 수행합니다.</p>
+        <input type="file" id="audioInput" accept="audio/*">
+        <button class="btn" onclick="startProcess()">분석 시작</button>
+        <div id="loading">🚀 AI가 열심히 분석 중입니다... (1~2분 소요)</div>
+
+        <div id="resultArea" class="result-area">
+            <h3>✨ 요약 결과</h3>
+            <div id="summary" class="box"></div>
+            <h3>📝 전체 스크립트</h3>
+            <div id="script" class="box"></div>
+        </div>
+    </div>
+
+    <script>
+        async function startProcess() {
+            const fileInput = document.getElementById('audioInput');
+            if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
+
+            const formData = new FormData();
+            formData.append('audio_file', fileInput.files[0]);
+
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('resultArea').style.display = 'none';
+
+            try {
+                const response = await fetch('/process', { method: 'POST', body: formData });
+                const data = await response.json();
+
+                document.getElementById('summary').innerText = data.summary;
+                document.getElementById('script').innerText = data.script;
+                document.getElementById('resultArea').style.display = 'block';
+            } catch (e) {
+                alert("처리 중 오류가 발생했습니다.");
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

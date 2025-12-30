@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  whisper-app:
+    build: .
+    container_name: whisper-app
+    ports:
+      - "5001:5001"
+    networks:
+      - ai-network
+    restart: always
+
+networks:
+  ai-network:
+    external: true  
