@@ -13,13 +13,13 @@ UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ARM CPU 최적화 로드 (4 OCPU 활용)
-model_size = "small"
+model_size = "base"
 whisper_model = WhisperModel(
     model_size, 
     device="cpu", 
     compute_type="int8", 
     cpu_threads=4, 
-    num_workers=2
+    num_workers=1
 )
 
 OLLAMA_URL = "http://ollama:11434/api/generate"
@@ -37,12 +37,12 @@ async def process_audio(audio_file: UploadFile = File(...)):
     try:
         # 1. Faster-Whisper 변환
         segments, info = whisper_model.transcribe(
-            file_path, beam_size=5, language="ko", vad_filter=True
+            file_path, beam_size=5, language="ko", vad_filter=False
         )
         full_script = "".join([segment.text for segment in segments])
 
         # 2. Ollama 요약
-        system_prompt = "너는 신입사원을 위한 회의록 요약 전문가야. 주제별로 요약하고 해야할일 정리 및 결론을 알려줘. 한국어로 답변해."
+        system_prompt = "너는 신입사원을 위한 회의록 요약 전문가야. 주제별로 요약하고 해야할일 정리 및 결론을 알려줘. 꼭 한국어로 답변해."
         payload = {
             "model": "llama3",
             "prompt": f"{system_prompt}\n\n[내용]:\n{full_script}",
