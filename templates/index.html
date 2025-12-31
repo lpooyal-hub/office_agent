@@ -1,108 +1,58 @@
-from fastapi import FastAPI, UploadFile, File, Request, HTTPException
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from faster_whisper import WhisperModel
-import requests
-import os
-import shutil
-import logging
-from dotenv import load_dotenv
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 회의록 요약기</title>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        .result-area { margin-top: 30px; display: none; }
+        .box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 8px; white-space: pre-wrap; margin-bottom: 20px; }
+        #loading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🎙️ AI 회의록 요약 서비스</h2>
+        <p>음성 파일(wav, mp3 등)을 업로드하면 텍스트 변환과 요약을 한 번에 수행합니다.</p>
+        <input type="file" id="audioInput" accept="audio/*">
+        <button class="btn" onclick="startProcess()">분석 시작</button>
+        <div id="loading">🚀 AI가 열심히 분석 중입니다... (1~2분 소요)</div>
 
-# 1. 환경 변수 로드 (.env 파일에서 API 키를 읽어옴)
-load_dotenv()
+        <div id="resultArea" class="result-area">
+            <h3>✨ 요약 결과</h3>
+            <div id="summary" class="box"></div>
+            <h3>📝 전체 스크립트</h3>
+            <div id="script" class="box"></div>
+        </div>
+    </div>
 
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+    <script>
+        async function startProcess() {
+            const fileInput = document.getElementById('audioInput');
+            if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
 
-# 설정
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+            const formData = new FormData();
+            formData.append('audio_file', fileInput.files[0]);
 
-# API 키 및 URL 설정 (보안 강화)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logging.error("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('resultArea').style.display = 'none';
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-# Faster-Whisper 모델 로드 (ARM CPU 최적화)
-# 4 OCPU를 효율적으로 쓰기 위해 cpu_threads=4 설정
-whisper_model = WhisperModel(
-    "base", 
-    device="cpu", 
-    compute_type="int8", 
-    cpu_threads=4, 
-    num_workers=1
-)
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-@app.post("/process")
-async def process_audio(audio_file: UploadFile = File(...)):
-    file_path = os.path.join(UPLOAD_FOLDER, audio_file.filename)
-    
-    # 임시 파일 저장
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(audio_file.file, buffer)
-
-    try:
-        logging.info(f"변환 시작: {audio_file.filename}")
-        
-        # 2. Faster-Whisper로 텍스트 추출 (로컬 연산)
-        segments, info = whisper_model.transcribe(
-            file_path, beam_size=1, language="ko", vad_filter=True
-        )
-        
-        full_script = " ".join([segment.text for segment in segments]).strip()
-        
-        if not full_script:
-            return {"script": "텍스트 추출 실패", "summary": "내용이 비어있습니다."}
-
-        logging.info("Gemini API 요약 요청 중...")
-
-        # 3. Gemini API로 요약 (외부 API 연동)
-        prompt = f"""
-        너는 전문적인 회의록 요약가야. 
-        제공된 대화 내용을 바탕으로 다음 형식에 맞춰 한국어로 작성해줘:
-        1. 주제별 핵심 요약
-        2. 주요 결정 사항 및 할 일(Action Items)
-        3. 전체적인 결론
-        
-        내용: {full_script}
-        """
-
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
+            try {
+                const response = await fetch('/process', { method: 'POST', body: formData });
+                const data = await response.json();
+                
+                document.getElementById('summary').innerText = data.summary;
+                document.getElementById('script').innerText = data.script;
+                document.getElementById('resultArea').style.display = 'block';
+            } catch (e) {
+                alert("처리 중 오류가 발생했습니다.");
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
         }
-
-        # Gemini API 호출
-        response = requests.post(GEMINI_URL, json=payload, timeout=30)
-        response.raise_for_status()
-        
-        result = response.json()
-        
-        # API 응답에서 요약문만 추출
-        try:
-            summary = result['candidates'][0]['content']['parts'][0]['text']
-        except (KeyError, IndexResponse):
-            summary = "요약문을 생성하는 중 응답 구조에 오류가 발생했습니다."
-
-        logging.info("전체 프로세스 완료")
-        return {"script": full_script, "summary": summary}
-
-    except Exception as e:
-        logging.error(f"프로세스 오류: {str(e)}")
-        return {"script": full_script, "summary": f"오류 발생: {str(e)}"}
-        
-    finally:
-        # 작업 완료 후 오디오 파일 삭제 (서버 용량 관리)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5001)
+    </script>
+</body>
+</html>
