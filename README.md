@@ -1,4 +1,4 @@
-# 🎙️ AI 회의록 요약 서비스 (AI Minutes Summarizer)
+# 🎙️ AI 회의록 요약 서비스
 
 **AI 회의록 요약 서비스**는 음성 파일(mp3, wav 등)을 업로드하면 OpenAI Whisper를 통해 텍스트로 변환(STT)하고, Google Gemini API를 사용하여 회의 내용을 주제별로 요약해주는 웹 애플리케이션입니다.
 
