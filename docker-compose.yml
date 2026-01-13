@@ -6,6 +6,9 @@ services:
     container_name: whisper-app
     ports:
       - "5001:5001"
+    # 아래 라인을 추가하여 .env 파일을 컨테이너로 로드합니다.
+    env_file:
+      - .env
     volumes:
       - ./uploads:/app/uploads
     networks:

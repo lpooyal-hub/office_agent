@@ -1,17 +1,8 @@
-# Web Framework
 fastapi
 uvicorn[standard]
 jinja2
 python-multipart
-
-# AI & Processing
-# faster-whisper 대신 아래 패키지를 사용합니다.
 openai-whisper
-# CPU 전용 torch 설정 (기존 유지)
-torch --index-url https://download.pytorch.org/whl/cpu 
-
-# API & Utilities
-google-genai
-requests
+ibm-watsonx-ai
 python-dotenv
-setuptools-rust
+torch --index-url https://download.pytorch.org/whl/cpu
