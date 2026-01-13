@@ -1,16 +1,8 @@
-# Web Framework
 fastapi
 uvicorn[standard]
 jinja2
 python-multipart
-
-# AI & Processing
-faster-whisper
-# CPU 환경에서 용량을 줄이고 싶다면 아래 torch 설정 대신 
-# 빌드 시 별도의 index-url을 사용하거나, 필요한 경우에만 포함하세요.
-torch --index-url https://download.pytorch.org/whl/cpu 
-
-# API & Utilities
-google-genai
-requests
+openai-whisper
+ibm-watsonx-ai
 python-dotenv
+torch --index-url https://download.pytorch.org/whl/cpu
