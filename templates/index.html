@@ -2,55 +2,89 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>AI 회의록 요약기</title>
+    <title>AI 회의록 요약 & 내규 검토</title>
     <style>
-        body { font-family: 'Malgun Gothic', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
+        body { font-family: 'Malgun Gothic', sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
         .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        .btn { background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: 0.3s; }
+        .btn:hover { background: #0056b3; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        
         .result-area { margin-top: 30px; display: none; }
-        .box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 8px; white-space: pre-wrap; margin-bottom: 20px; }
-        #loading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
+        .box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 8px; white-space: pre-wrap; margin-bottom: 20px; line-height: 1.6; }
+        
+        /* RAG 결과 강조 스타일 */
+        .rule-box { background: #e3f2fd; border-left: 5px solid #2196f3; font-size: 0.95em; color: #1565c0; }
+        
+        #loading { display: none; color: #007bff; font-weight: bold; margin-top: 15px; text-align: center; }
+        input[type="file"] { margin-bottom: 10px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>🎙️ AI 회의록 요약 서비스</h2>
-        <p>음성 파일(wav, mp3 등)을 업로드하면 텍스트 변환과 요약을 한 번에 수행합니다.</p>
-        <input type="file" id="audioInput" accept="audio/*">
-        <button class="btn" onclick="startProcess()">분석 시작</button>
-        <div id="loading">🚀 AI가 열심히 분석 중입니다...</div>
+        <h2>🎙️ AI 회의록 & 내규 검토 서비스</h2>
+        <p>음성 파일을 업로드하면 <b>STT 변환 + 사내 내규 검색 + AI 요약</b>을 한 번에 수행합니다.</p>
+        
+        <div style="margin: 20px 0;">
+            <input type="file" id="audioInput" accept="audio/*">
+            <button class="btn" id="submitBtn" onclick="startProcess()">분석 시작</button>
+        </div>
+        
+        <div id="loading">🚀 AI와 검색 엔진이 열심히 분석 중입니다... 잠시만 기다려주세요.</div>
 
         <div id="resultArea" class="result-area">
-            <h3>✨ 요약 결과</h3>
+            <h3>🔍 검색된 관련 사내 내규</h3>
+            <div id="retrievedRule" class="box rule-box"></div>
+
+            <h3>✨ AI 요약 및 검토 결과</h3>
             <div id="summary" class="box"></div>
-            <h3>📝 전체 스크립트</h3>
-            <div id="script" class="box"></div>
+            
+            <h3>📝 전체 스크립트 (STT)</h3>
+            <div id="script" class="box" style="color: #666; font-size: 0.9em;"></div>
         </div>
     </div>
 
     <script>
         async function startProcess() {
             const fileInput = document.getElementById('audioInput');
+            const btn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const resultArea = document.getElementById('resultArea');
+
             if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
 
             const formData = new FormData();
             formData.append('audio_file', fileInput.files[0]);
 
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('resultArea').style.display = 'none';
+            // UI 초기화
+            loading.style.display = 'block';
+            resultArea.style.display = 'none';
+            btn.disabled = true;
 
             try {
-                const response = await fetch('/process', { method: 'POST', body: formData });
+                // 백엔드의 /process 엔드포인트 호출
+                const response = await fetch('/process', { 
+                    method: 'POST', 
+                    body: formData 
+                });
+                
+                if (!response.ok) throw new Error("서버 응답 오류");
+                
                 const data = await response.json();
                 
+                // 데이터 매핑
+                document.getElementById('retrievedRule').innerText = data.retrieved_rule || "관련 내규를 찾지 못했습니다.";
                 document.getElementById('summary').innerText = data.summary;
                 document.getElementById('script').innerText = data.script;
-                document.getElementById('resultArea').style.display = 'block';
+                
+                resultArea.style.display = 'block';
             } catch (e) {
-                alert("처리 중 오류가 발생했습니다.");
+                console.error(e);
+                alert("처리 중 오류가 발생했습니다. 서버 로그를 확인하세요.");
             } finally {
-                document.getElementById('loading').style.display = 'none';
+                loading.style.display = 'none';
+                btn.disabled = false;
             }
         }
     </script>
