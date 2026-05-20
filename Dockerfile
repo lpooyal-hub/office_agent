@@ -15,8 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# 업로드 폴더 생성
-RUN mkdir -p uploads
+# 런타임 데이터 폴더 생성
+RUN mkdir -p uploads documents
 
 EXPOSE 5001
 

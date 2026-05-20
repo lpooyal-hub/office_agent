@@ -3,18 +3,19 @@ version: '3.8'
 services:
   whisper-app:
     build: .
-    container_name: whisper-app
+    container_name: office-agent
     ports:
       - "5001:5001"
-    # 아래 라인을 추가하여 .env 파일을 컨테이너로 로드합니다.
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_STT_MODEL: ${OPENAI_STT_MODEL:-gpt-4o-mini-transcribe}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-jhgan/ko-sroberta-multitask}
     volumes:
       - ./uploads:/app/uploads
-    networks:
-      - ai-network
+      - ./documents:/app/documents
     restart: always
-
-networks:
-  ai-network:
-    external: true

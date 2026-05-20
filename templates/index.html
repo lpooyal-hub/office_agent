@@ -2,9 +2,9 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>AI 회의록 요약 & 내규 검토</title>
+    <title>Office-Agent</title>
     <style>
-        body { font-family: 'Malgun Gothic', sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
+        body { font-family: 'Malgun Gothic', sans-serif; max-width: 980px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
         .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         .btn { background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: 0.3s; }
@@ -18,44 +18,148 @@
         .rule-box { background: #e3f2fd; border-left: 5px solid #2196f3; font-size: 0.95em; color: #1565c0; }
         
         #loading { display: none; color: #007bff; font-weight: bold; margin-top: 15px; text-align: center; }
+        #docLoading { display: none; color: #455a64; font-weight: bold; margin-top: 10px; }
         input[type="file"] { margin-bottom: 10px; }
+        .meta { color: #607d8b; font-size: 13px; line-height: 1.6; }
+        .section { border-top: 1px solid #e5e7eb; margin-top: 26px; padding-top: 22px; }
+        .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+        .feature { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+        .feature strong { display: block; margin-bottom: 6px; color: #263238; }
+        .mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 18px; }
+        .mode-option { border: 1px solid #dbe3ea; border-radius: 10px; padding: 12px; cursor: pointer; background: #fafafa; }
+        .mode-option input { margin-right: 8px; }
+        .mode-option strong { display: block; margin-bottom: 4px; color: #263238; }
+        .mode-option span { display: block; color: #607d8b; font-size: 12px; line-height: 1.5; }
+        textarea { width: 100%; min-height: 92px; border: 1px solid #dbe3ea; border-radius: 10px; padding: 12px; resize: vertical; font-family: inherit; line-height: 1.5; box-sizing: border-box; }
+        #chatLoading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
+        #chatResult { display: none; margin-top: 18px; }
+        @media (max-width: 640px) {
+            .feature-grid { grid-template-columns: 1fr; }
+            .mode-options { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>🎙️ AI 회의록 & 내규 검토 서비스</h2>
-        <p>음성 파일을 업로드하면 <b>STT 변환 + 사내 내규 검색 + AI 요약</b>을 한 번에 수행합니다.</p>
+        <h2>Office-Agent</h2>
+        <p>회의와 통화 음성을 요약하고, 업로드한 회사 문서를 기반으로 신입사원 질문에 답하는 업무 지원 도구입니다.</p>
+        <div class="feature-grid">
+            <div class="feature">
+                <strong>음성 요약 및 업무 정리</strong>
+                <span class="meta">회의나 통화 녹음 파일을 넣으면 핵심 요약, 결정 사항, Action Item을 정리합니다.</span>
+            </div>
+            <div class="feature">
+                <strong>회사 내규 챗봇</strong>
+                <span class="meta">PDF, DOCX, TXT, MD 문서를 올려 신입사원용 Q&A 자료로 활용합니다.</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>회사 문서 업로드</h3>
+            <p class="meta">PDF, DOCX, TXT, MD 파일을 업로드하면 사내 내규/가이드라인 검색 대상에 추가됩니다.</p>
+            <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" multiple>
+            <button class="btn" id="docBtn" onclick="uploadDocuments()">문서 업로드</button>
+            <div id="docLoading">문서를 읽고 챗봇 답변 자료를 갱신하는 중입니다...</div>
+            <div id="docResult" class="box rule-box" style="display:none; margin-top: 15px;"></div>
+        </div>
+
+        <div class="section">
+            <h3>신입사원용 내규 챗봇</h3>
+            <p class="meta">업로드된 회사 문서를 바탕으로 연차, 복지, 재택근무, 비용 정산 같은 질문에 답합니다.</p>
+            <textarea id="chatQuestion" placeholder="예: 신입사원 연차는 어떻게 발생하나요?"></textarea>
+            <button class="btn" id="chatBtn" onclick="askPolicyBot()">질문하기</button>
+            <div id="chatLoading">회사 문서를 검색하고 답변을 생성하는 중입니다...</div>
+            <div id="chatResult">
+                <h3>답변</h3>
+                <div id="chatAnswer" class="box"></div>
+                <h3>참고한 문서</h3>
+                <div id="chatContext" class="box rule-box"></div>
+            </div>
+        </div>
         
-        <div style="margin: 20px 0;">
+        <div class="section">
+            <h3>음성 요약 및 업무 정리</h3>
+            <div class="mode-options">
+                <label class="mode-option">
+                    <input type="radio" name="sttMode" value="local" checked>
+                    <strong>일반 모드</strong>
+                    <span>서버에서 음성을 변환합니다. 비용은 없지만 긴 음성은 느릴 수 있습니다.</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="sttMode" value="openai">
+                    <strong>고성능 모드</strong>
+                    <span>API 기반 음성 변환을 사용합니다. 정확도와 속도를 우선하며 비용이 발생합니다.</span>
+                </label>
+            </div>
             <input type="file" id="audioInput" accept="audio/*">
             <button class="btn" id="submitBtn" onclick="startProcess()">분석 시작</button>
         </div>
         
-        <div id="loading">🚀 AI와 검색 엔진이 열심히 분석 중입니다... 잠시만 기다려주세요.</div>
+        <div id="loading">음성 내용을 분석하고 업무 요약을 작성하는 중입니다. 잠시만 기다려주세요.</div>
 
         <div id="resultArea" class="result-area">
-            <h3>🔍 검색된 관련 사내 내규</h3>
+            <h3>검색된 관련 회사 문서</h3>
             <div id="retrievedRule" class="box rule-box"></div>
 
-            <h3>✨ AI 요약 및 검토 결과</h3>
+            <h3>요약 및 업무 정리</h3>
             <div id="summary" class="box"></div>
             
-            <h3>📝 전체 스크립트 (STT)</h3>
+            <h3>전체 스크립트</h3>
             <div id="script" class="box" style="color: #666; font-size: 0.9em;"></div>
         </div>
     </div>
 
     <script>
+        async function uploadDocuments() {
+            const fileInput = document.getElementById('docInput');
+            const btn = document.getElementById('docBtn');
+            const loading = document.getElementById('docLoading');
+            const resultBox = document.getElementById('docResult');
+
+            if (!fileInput.files.length) return alert("업로드할 문서를 선택해주세요!");
+
+            const formData = new FormData();
+            Array.from(fileInput.files).forEach((file) => formData.append('files', file));
+
+            loading.style.display = 'block';
+            resultBox.style.display = 'none';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/documents', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error("문서 업로드 서버 응답 오류");
+
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                resultBox.innerText = `${data.files.length}개 파일 업로드 완료\n챗봇 답변 자료가 갱신되었습니다.`;
+                resultBox.style.display = 'block';
+                fileInput.value = '';
+            } catch (e) {
+                console.error(e);
+                alert(`문서 업로드 중 오류가 발생했습니다.\n${e.message}`);
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
         async function startProcess() {
             const fileInput = document.getElementById('audioInput');
             const btn = document.getElementById('submitBtn');
             const loading = document.getElementById('loading');
             const resultArea = document.getElementById('resultArea');
+            const sttMode = document.querySelector('input[name="sttMode"]:checked').value;
 
             if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
 
             const formData = new FormData();
             formData.append('audio_file', fileInput.files[0]);
+            formData.append('stt_mode', sttMode);
 
             // UI 초기화
             loading.style.display = 'block';
@@ -72,16 +176,58 @@
                 if (!response.ok) throw new Error("서버 응답 오류");
                 
                 const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 
                 // 데이터 매핑
                 document.getElementById('retrievedRule').innerText = data.retrieved_rule || "관련 내규를 찾지 못했습니다.";
-                document.getElementById('summary').innerText = data.summary;
-                document.getElementById('script').innerText = data.script;
+                document.getElementById('summary').innerText = data.summary || "요약 결과가 없습니다.";
+                document.getElementById('script').innerText = data.script || "인식된 스크립트가 없습니다.";
                 
                 resultArea.style.display = 'block';
             } catch (e) {
                 console.error(e);
-                alert("처리 중 오류가 발생했습니다. 서버 로그를 확인하세요.");
+                alert(`처리 중 오류가 발생했습니다.\n${e.message}`);
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
+        async function askPolicyBot() {
+            const questionInput = document.getElementById('chatQuestion');
+            const btn = document.getElementById('chatBtn');
+            const loading = document.getElementById('chatLoading');
+            const resultArea = document.getElementById('chatResult');
+
+            if (!questionInput.value.trim()) return alert("질문을 입력해주세요!");
+
+            const formData = new FormData();
+            formData.append('question', questionInput.value.trim());
+
+            loading.style.display = 'block';
+            resultArea.style.display = 'none';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error("챗봇 서버 응답 오류");
+
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById('chatAnswer').innerText = data.answer || "답변을 생성하지 못했습니다.";
+                document.getElementById('chatContext').innerText = data.retrieved_rule || "참고 문서를 찾지 못했습니다.";
+                resultArea.style.display = 'block';
+            } catch (e) {
+                console.error(e);
+                alert(`질문 처리 중 오류가 발생했습니다.\n${e.message}`);
             } finally {
                 loading.style.display = 'none';
                 btn.disabled = false;

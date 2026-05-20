@@ -1,5 +1,6 @@
 # .gitignore 파일 내용
 .env
 uploads/
+documents/
 __pycache__/
 *.pyc

@@ -4,11 +4,11 @@ jinja2
 python-multipart
 openai-whisper
 python-dotenv
-# Google Gemini API 공식 라이브러리 추가
-google-generativeai
-# numpy 버전을 2.0 미만으로 고정 (Whisper 및 최신 라이브러리 호환성)
+requests
+sentence-transformers
+scikit-learn
+pypdf
+python-docx
 numpy<2.0.0
-# pandas 안정 버전
 pandas<2.1.0
-# CPU 환경 최적화된 PyTorch
-torch --index-url https://download.pytorch.org/whl/cpu
+torch
