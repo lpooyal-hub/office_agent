@@ -39,6 +39,7 @@ Office-Agent는 로컬 임베딩 모델과 OpenAI API를 조합한 하이브리�
 - RAG 기반 회의록 생성
 - 신입사원용 회사 내규 챗봇
 - 로컬 기반 임베딩 처리 구조
+- 접속 코드, 요청 제한, 업로드 용량 제한 기반 공개 데모 보호
 - OCI ARM 서버 기반 운영 환경
 - Docker 기반 서비스 실행 환경
 
@@ -98,9 +99,16 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_STT_MODEL=gpt-4o-mini-transcribe
 WHISPER_MODEL=base
 EMBEDDING_MODEL=jhgan/ko-sroberta-multitask
+ACCESS_CODE=change_this_demo_password
+RATE_LIMIT_REQUESTS=20
+RATE_LIMIT_WINDOW_SECONDS=3600
+MAX_AUDIO_UPLOAD_MB=25
+MAX_DOCUMENT_UPLOAD_MB=10
 ```
 
 `.env.example` 파일을 참고해 `.env`를 생성합니다.
+
+`ACCESS_CODE`는 공개 데모 페이지에서 OpenAI API 비용이 발생하는 기능을 보호하기 위한 접속 코드입니다.
 
 ### Start
 

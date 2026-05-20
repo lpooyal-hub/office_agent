@@ -30,6 +30,9 @@
         .mode-option input { margin-right: 8px; }
         .mode-option strong { display: block; margin-bottom: 4px; color: #263238; }
         .mode-option span { display: block; color: #607d8b; font-size: 12px; line-height: 1.5; }
+        .access-box { background: #fff8e1; border: 1px solid #ffe082; border-radius: 10px; padding: 14px; margin-top: 18px; }
+        .access-box label { display: block; font-weight: 700; color: #374151; margin-bottom: 8px; }
+        .access-box input { width: 100%; border: 1px solid #d6c681; border-radius: 8px; padding: 11px 12px; box-sizing: border-box; font-family: inherit; }
         textarea { width: 100%; min-height: 92px; border: 1px solid #dbe3ea; border-radius: 10px; padding: 12px; resize: vertical; font-family: inherit; line-height: 1.5; box-sizing: border-box; }
         #chatLoading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
         #chatResult { display: none; margin-top: 18px; }
@@ -52,6 +55,12 @@
                 <strong>회사 내규 챗봇</strong>
                 <span class="meta">PDF, DOCX, TXT, MD 문서를 올려 신입사원용 Q&A 자료로 활용합니다.</span>
             </div>
+        </div>
+
+        <div class="access-box">
+            <label for="accessCode">접속 코드</label>
+            <input type="password" id="accessCode" autocomplete="off" placeholder="테스트용 접속 코드를 입력해주세요">
+            <p class="meta">API 비용 보호를 위해 요약, 문서 업로드, 챗봇 질문에는 접속 코드가 필요합니다.</p>
         </div>
 
         <div class="section">
@@ -117,8 +126,11 @@
             const resultBox = document.getElementById('docResult');
 
             if (!fileInput.files.length) return alert("업로드할 문서를 선택해주세요!");
+            const accessCode = getAccessCode();
+            if (!accessCode) return;
 
             const formData = new FormData();
+            formData.append('access_code', accessCode);
             Array.from(fileInput.files).forEach((file) => formData.append('files', file));
 
             loading.style.display = 'block';
@@ -131,9 +143,8 @@
                     body: formData
                 });
 
-                if (!response.ok) throw new Error("문서 업로드 서버 응답 오류");
-
                 const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "문서 업로드 서버 응답 오류");
                 if (data.error) throw new Error(data.error);
 
                 resultBox.innerText = `${data.files.length}개 파일 업로드 완료\n챗봇 답변 자료가 갱신되었습니다.`;
@@ -156,10 +167,13 @@
             const sttMode = document.querySelector('input[name="sttMode"]:checked').value;
 
             if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
+            const accessCode = getAccessCode();
+            if (!accessCode) return;
 
             const formData = new FormData();
             formData.append('audio_file', fileInput.files[0]);
             formData.append('stt_mode', sttMode);
+            formData.append('access_code', accessCode);
 
             // UI 초기화
             loading.style.display = 'block';
@@ -173,9 +187,8 @@
                     body: formData 
                 });
                 
-                if (!response.ok) throw new Error("서버 응답 오류");
-                
                 const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "서버 응답 오류");
 
                 if (data.error) {
                     throw new Error(data.error);
@@ -203,9 +216,12 @@
             const resultArea = document.getElementById('chatResult');
 
             if (!questionInput.value.trim()) return alert("질문을 입력해주세요!");
+            const accessCode = getAccessCode();
+            if (!accessCode) return;
 
             const formData = new FormData();
             formData.append('question', questionInput.value.trim());
+            formData.append('access_code', accessCode);
 
             loading.style.display = 'block';
             resultArea.style.display = 'none';
@@ -217,9 +233,8 @@
                     body: formData
                 });
 
-                if (!response.ok) throw new Error("챗봇 서버 응답 오류");
-
                 const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || "챗봇 서버 응답 오류");
                 if (data.error) throw new Error(data.error);
 
                 document.getElementById('chatAnswer').innerText = data.answer || "답변을 생성하지 못했습니다.";
@@ -232,6 +247,15 @@
                 loading.style.display = 'none';
                 btn.disabled = false;
             }
+        }
+
+        function getAccessCode() {
+            const accessCode = document.getElementById('accessCode').value.trim();
+            if (!accessCode) {
+                alert("접속 코드를 입력해주세요.");
+                return "";
+            }
+            return accessCode;
         }
     </script>
 </body>

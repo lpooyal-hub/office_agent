@@ -15,6 +15,11 @@ services:
       OPENAI_STT_MODEL: ${OPENAI_STT_MODEL:-gpt-4o-mini-transcribe}
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-jhgan/ko-sroberta-multitask}
+      ACCESS_CODE: ${ACCESS_CODE:-}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-20}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-3600}
+      MAX_AUDIO_UPLOAD_MB: ${MAX_AUDIO_UPLOAD_MB:-25}
+      MAX_DOCUMENT_UPLOAD_MB: ${MAX_DOCUMENT_UPLOAD_MB:-10}
     volumes:
       - ./uploads:/app/uploads
       - ./documents:/app/documents

@@ -1,8 +1,10 @@
 import logging
 import os
 import re
-import shutil
+import secrets
+import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 from threading import RLock
 from typing import List
@@ -12,7 +14,7 @@ import requests
 import whisper
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pypdf import PdfReader
@@ -35,6 +37,11 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jhgan/ko-sroberta-multitask")
+ACCESS_CODE = os.getenv("ACCESS_CODE", "")
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "20"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
+MAX_AUDIO_UPLOAD_MB = int(os.getenv("MAX_AUDIO_UPLOAD_MB", "25"))
+MAX_DOCUMENT_UPLOAD_MB = int(os.getenv("MAX_DOCUMENT_UPLOAD_MB", "10"))
 
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 
@@ -51,6 +58,7 @@ _embedder = None
 _rule_chunks = None
 _rule_embeddings = None
 _model_lock = RLock()
+_request_history = defaultdict(deque)
 
 
 def get_whisper_model():
@@ -345,12 +353,68 @@ def expand_query_terms(query):
     return terms
 
 
-def save_upload_file(upload_file, target_folder):
+def get_client_id(request):
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def require_access_code(access_code):
+    if not ACCESS_CODE:
+        raise HTTPException(
+            status_code=503,
+            detail="서비스 접속 코드가 설정되어 있지 않습니다.",
+        )
+    if not secrets.compare_digest(access_code or "", ACCESS_CODE):
+        raise HTTPException(status_code=403, detail="접속 코드가 올바르지 않습니다.")
+
+
+def enforce_rate_limit(client_id):
+    now = time.time()
+    history = _request_history[client_id]
+
+    while history and now - history[0] > RATE_LIMIT_WINDOW_SECONDS:
+        history.popleft()
+
+    if len(history) >= RATE_LIMIT_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail="요청이 너무 많습니다. 잠시 후 다시 시도해주세요.",
+        )
+
+    history.append(now)
+
+
+def protect_request(request, access_code):
+    require_access_code(access_code)
+    enforce_rate_limit(get_client_id(request))
+
+
+def save_upload_file(upload_file, target_folder, max_size_mb):
     safe_filename = Path(upload_file.filename or "uploaded_file").name
     target_path = target_folder / f"{uuid.uuid4()}_{safe_filename}"
+    max_size_bytes = max_size_mb * 1024 * 1024
+    total_size = 0
 
     with target_path.open("wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
+        while True:
+            chunk = upload_file.file.read(1024 * 1024)
+            if not chunk:
+                break
+
+            total_size += len(chunk)
+            if total_size > max_size_bytes:
+                target_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"파일은 {max_size_mb}MB 이하만 업로드할 수 있습니다.",
+                )
+
+            buffer.write(chunk)
+
     return target_path
 
 
@@ -382,7 +446,12 @@ async def health():
 
 
 @app.post("/documents")
-async def upload_documents(files: List[UploadFile] = File(...)):
+async def upload_documents(
+    request: Request,
+    access_code: str = Form(""),
+    files: List[UploadFile] = File(...),
+):
+    protect_request(request, access_code)
     saved = []
 
     for file in files:
@@ -390,7 +459,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
         if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
             return {"error": f"지원하지 않는 문서 형식입니다: {file.filename}"}
 
-        saved_path = save_upload_file(file, DOCUMENT_FOLDER)
+        saved_path = save_upload_file(file, DOCUMENT_FOLDER, MAX_DOCUMENT_UPLOAD_MB)
         saved.append(saved_path.name)
 
     invalidate_rag_index()
@@ -402,7 +471,12 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 
 
 @app.post("/chat")
-async def chat_policy(question: str = Form(...)):
+async def chat_policy(
+    request: Request,
+    question: str = Form(...),
+    access_code: str = Form(""),
+):
+    protect_request(request, access_code)
     question = question.strip()
     if not question:
         return {"error": "질문을 입력해주세요."}
@@ -420,8 +494,14 @@ async def chat_policy(question: str = Form(...)):
 
 
 @app.post("/process")
-async def process_audio(audio_file: UploadFile = File(...), stt_mode: str = Form("local")):
-    file_path = save_upload_file(audio_file, UPLOAD_FOLDER)
+async def process_audio(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    stt_mode: str = Form("local"),
+    access_code: str = Form(""),
+):
+    protect_request(request, access_code)
+    file_path = save_upload_file(audio_file, UPLOAD_FOLDER, MAX_AUDIO_UPLOAD_MB)
 
     try:
         if stt_mode not in {"local", "openai"}:
