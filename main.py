@@ -3,7 +3,6 @@ import os
 import re
 import secrets
 import time
-import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 from threading import RLock
@@ -14,22 +13,13 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 try:
     import whisper
 except ImportError:  # pragma: no cover - optional dependency
     whisper = None
-
-try:
-    from docx import Document
-except ImportError:  # pragma: no cover - optional dependency
-    Document = None
-
-try:
-    from pypdf import PdfReader
-except ImportError:  # pragma: no cover - optional dependency
-    PdfReader = None
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -41,6 +31,18 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     cosine_similarity = None
 
+from services.document_library import (
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+    clear_document_library,
+    delete_document_file,
+    get_display_filename,
+    get_safe_upload_filename,
+    list_stored_documents,
+    read_document_text,
+    save_upload_file,
+    split_text,
+)
+
 load_dotenv()
 
 app = FastAPI()
@@ -49,8 +51,11 @@ logging.basicConfig(level=logging.INFO)
 
 UPLOAD_FOLDER = Path("uploads")
 DOCUMENT_FOLDER = Path("documents")
+STATIC_FOLDER = Path("static")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 DOCUMENT_FOLDER.mkdir(exist_ok=True)
+STATIC_FOLDER.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -63,8 +68,6 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
 MAX_AUDIO_UPLOAD_MB = int(os.getenv("MAX_AUDIO_UPLOAD_MB", "25"))
 MAX_DOCUMENT_UPLOAD_MB = int(os.getenv("MAX_DOCUMENT_UPLOAD_MB", "10"))
 MAX_SUMMARY_DOCUMENTS = int(os.getenv("MAX_SUMMARY_DOCUMENTS", "5"))
-
-SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 
 DEFAULT_COMPANY_RULES = [
     "연차 휴가는 1년 미만 근로자의 경우 1개월 개근 시 1일이 발생하며, 총 11일 한도입니다.",
@@ -278,49 +281,10 @@ def transcribe_audio(file_path, stt_mode):
     return result["text"].strip()
 
 
-def split_text(text, max_chars=900):
-    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
-    chunks = []
-    current = ""
-
-    for paragraph in paragraphs:
-        if len(current) + len(paragraph) + 1 > max_chars and current:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = f"{current}\n{paragraph}".strip()
-
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def read_document_text(path):
-    suffix = path.suffix.lower()
-    if suffix == ".pdf":
-        if PdfReader is None:
-            raise RuntimeError("pypdf 패키지가 설치되지 않았습니다.")
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-
-    if suffix == ".docx":
-        if Document is None:
-            raise RuntimeError("python-docx 패키지가 설치되지 않았습니다.")
-        document = Document(str(path))
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
-
-    if suffix in {".txt", ".md"}:
-        return path.read_text(encoding="utf-8", errors="ignore")
-
-    raise ValueError(f"지원하지 않는 문서 형식입니다: {suffix}")
-
-
 def load_rule_chunks():
     chunks = list(DEFAULT_COMPANY_RULES)
-    for path in sorted(DOCUMENT_FOLDER.iterdir()):
-        if path.suffix.lower() not in SUPPORTED_DOCUMENT_EXTENSIONS:
-            continue
-
+    for document in reversed(list_stored_documents(DOCUMENT_FOLDER)):
+        path = DOCUMENT_FOLDER / document["stored_name"]
         try:
             text = read_document_text(path)
         except Exception as exc:
@@ -328,7 +292,7 @@ def load_rule_chunks():
             continue
 
         for chunk in split_text(text):
-            chunks.append(f"[{path.name}]\n{chunk}")
+            chunks.append(f"[{document['display_name']}]\n{chunk}")
     return chunks
 
 
@@ -355,6 +319,21 @@ def invalidate_rag_index():
     with _model_lock:
         _rule_chunks = None
         _rule_embeddings = None
+
+
+def parse_rule_match(chunk_text, score):
+    lines = chunk_text.splitlines()
+    source = "기본 내규"
+    excerpt = chunk_text
+    if lines and lines[0].startswith("[") and lines[0].endswith("]"):
+        source = lines[0][1:-1]
+        excerpt = "\n".join(lines[1:]).strip() or "(본문 없음)"
+
+    return {
+        "source": source,
+        "score": round(score, 2),
+        "excerpt": excerpt[:320].strip(),
+    }
 
 
 def get_relevant_rules(query, threshold=0.35, top_k=3):
@@ -475,33 +454,19 @@ def protect_request(request, access_code):
     enforce_rate_limit(get_client_id(request))
 
 
-def save_upload_file(upload_file, target_folder, max_size_mb):
-    safe_filename = get_safe_upload_filename(upload_file.filename)
-    target_path = target_folder / f"{uuid.uuid4()}_{safe_filename}"
-    max_size_bytes = max_size_mb * 1024 * 1024
-    total_size = 0
-
-    with target_path.open("wb") as buffer:
-        while True:
-            chunk = upload_file.file.read(1024 * 1024)
-            if not chunk:
-                break
-
-            total_size += len(chunk)
-            if total_size > max_size_bytes:
-                target_path.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"파일은 {max_size_mb}MB 이하만 업로드할 수 있습니다.",
-                )
-
-            buffer.write(chunk)
-
-    return target_path
+def raise_upload_error(message, status_code=400):
+    raise HTTPException(status_code=status_code, detail=message)
 
 
-def get_safe_upload_filename(filename):
-    return Path(filename or "uploaded_file").name
+def validate_document_uploads(files):
+    if not files:
+        raise_upload_error("문서를 선택해주세요.")
+
+    for file in files:
+        original_filename = get_safe_upload_filename(file.filename)
+        suffix = Path(original_filename).suffix.lower()
+        if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
+            raise_upload_error(f"지원하지 않는 문서 형식입니다: {original_filename}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -510,7 +475,7 @@ async def index(request: Request):
         "index.html",
         {
             "request": request,
-            "document_count": len(get_rule_chunks()),
+            "document_count": len(list_stored_documents(DOCUMENT_FOLDER)),
             "embedding_model": EMBEDDING_MODEL,
             "llm_model": OPENAI_MODEL,
             "openai_stt_model": OPENAI_STT_MODEL,
@@ -531,6 +496,15 @@ async def health():
     }
 
 
+@app.get("/documents")
+async def get_documents():
+    documents = list_stored_documents(DOCUMENT_FOLDER)
+    return {
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
 @app.post("/documents")
 async def upload_documents(
     request: Request,
@@ -538,21 +512,91 @@ async def upload_documents(
     files: List[UploadFile] = File(...),
 ):
     protect_request(request, access_code)
-    saved = []
+    validate_document_uploads(files)
 
-    for file in files:
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
-            return {"error": f"지원하지 않는 문서 형식입니다: {file.filename}"}
+    saved_paths = []
+    try:
+        for file in files:
+            saved_path = save_upload_file(
+                file,
+                DOCUMENT_FOLDER,
+                MAX_DOCUMENT_UPLOAD_MB,
+                preserve_name=True,
+            )
+            saved_paths.append(saved_path)
 
-        saved_path = save_upload_file(file, DOCUMENT_FOLDER, MAX_DOCUMENT_UPLOAD_MB)
-        saved.append(saved_path.name)
+            text = read_document_text(saved_path)
+            if not text.strip():
+                raise_upload_error(
+                    f"문서에서 읽을 수 있는 내용이 없습니다: {get_display_filename(saved_path.name)}"
+                )
+    except ValueError as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        raise_upload_error(str(exc), status_code=413)
+    except HTTPException:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        logging.error("Document upload error: %s", str(exc))
+        raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
 
     invalidate_rag_index()
+    documents = list_stored_documents(DOCUMENT_FOLDER)
     return {
-        "message": "문서 업로드 및 RAG 인덱스 갱신 준비 완료",
-        "files": saved,
+        "message": "문서 업로드와 지식 베이스 갱신이 완료되었습니다.",
+        "files": [
+            {
+                "stored_name": path.name,
+                "display_name": get_display_filename(path.name),
+            }
+            for path in saved_paths
+        ],
         "document_chunks": len(get_rule_chunks()),
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
+@app.delete("/documents/{stored_name}")
+async def remove_document(
+    request: Request,
+    stored_name: str,
+    access_code: str,
+):
+    protect_request(request, access_code)
+    try:
+        display_name = delete_document_file(DOCUMENT_FOLDER, stored_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    invalidate_rag_index()
+    documents = list_stored_documents(DOCUMENT_FOLDER)
+    return {
+        "message": f"{display_name} 문서를 삭제했습니다.",
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
+@app.delete("/documents")
+async def clear_documents(
+    request: Request,
+    access_code: str,
+):
+    protect_request(request, access_code)
+    deleted = clear_document_library(DOCUMENT_FOLDER)
+    invalidate_rag_index()
+    return {
+        "message": "문서 보관함을 비웠습니다.",
+        "deleted": deleted,
+        "count": 0,
+        "documents": [],
     }
 
 
@@ -563,8 +607,7 @@ async def summarize_documents(
     files: List[UploadFile] = File(...),
 ):
     protect_request(request, access_code)
-    if not files:
-        raise HTTPException(status_code=400, detail="요약할 문서를 선택해주세요.")
+    validate_document_uploads(files)
     if len(files) > MAX_SUMMARY_DOCUMENTS:
         raise HTTPException(
             status_code=400,
@@ -606,11 +649,13 @@ async def summarize_documents(
             "summaries": summaries,
             "combined_summary": combined_summary,
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         logging.error("Document summary error: %s", str(exc))
-        return {"error": str(exc)}
+        raise HTTPException(status_code=502, detail="문서 요약 중 오류가 발생했습니다.") from exc
     finally:
         for path in saved_paths:
             if path.exists():
@@ -626,18 +671,19 @@ async def chat_policy(
     protect_request(request, access_code)
     question = question.strip()
     if not question:
-        return {"error": "질문을 입력해주세요."}
+        raise HTTPException(status_code=400, detail="질문을 입력해주세요.")
 
     try:
-        related_rules, _ = get_relevant_rules(question, top_k=4)
+        related_rules, matches = get_relevant_rules(question, top_k=4)
         answer = generate_policy_answer(question, related_rules)
         return {
             "answer": answer,
             "retrieved_rule": related_rules,
+            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
         }
     except Exception as exc:
         logging.error("Chat error: %s", str(exc))
-        return {"error": str(exc)}
+        raise HTTPException(status_code=502, detail="챗봇 답변 생성 중 오류가 발생했습니다.") from exc
 
 
 @app.post("/process")
@@ -648,18 +694,21 @@ async def process_audio(
     access_code: str = Form(""),
 ):
     protect_request(request, access_code)
-    file_path = save_upload_file(audio_file, UPLOAD_FOLDER, MAX_AUDIO_UPLOAD_MB)
+    if stt_mode not in {"local", "openai"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 STT 모드입니다.")
 
     try:
-        if stt_mode not in {"local", "openai"}:
-            return {"error": "지원하지 않는 STT 모드입니다."}
+        file_path = save_upload_file(audio_file, UPLOAD_FOLDER, MAX_AUDIO_UPLOAD_MB)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
 
+    try:
         full_script = transcribe_audio(file_path, stt_mode)
 
         if not full_script:
             return {"script": "인식된 음성 없음", "summary": "내용 없음", "retrieved_rule": "N/A"}
 
-        related_rules, _ = get_relevant_rules(full_script)
+        related_rules, matches = get_relevant_rules(full_script)
 
         logging.info("OpenAI minutes generation start")
         summary = generate_minutes(full_script, related_rules)
@@ -669,11 +718,12 @@ async def process_audio(
             "summary": summary,
             "retrieved_rule": related_rules,
             "stt_mode": stt_mode,
+            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
         }
 
     except Exception as exc:
         logging.error("Error: %s", str(exc))
-        return {"error": str(exc)}
+        raise HTTPException(status_code=502, detail="음성 분석 중 오류가 발생했습니다.") from exc
 
     finally:
         if file_path.exists():

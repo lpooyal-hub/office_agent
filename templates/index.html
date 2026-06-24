@@ -2,311 +2,263 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Office-Agent</title>
-    <style>
-        body { font-family: 'Malgun Gothic', sans-serif; max-width: 980px; margin: 40px auto; padding: 20px; background-color: #f4f7f6; }
-        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h2 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-        .btn { background: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: 0.3s; }
-        .btn:hover { background: #0056b3; }
-        .btn:disabled { background: #ccc; cursor: not-allowed; }
-        
-        .result-area { margin-top: 30px; display: none; }
-        .box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; border-radius: 8px; white-space: pre-wrap; margin-bottom: 20px; line-height: 1.6; }
-        
-        /* RAG 결과 강조 스타일 */
-        .rule-box { background: #e3f2fd; border-left: 5px solid #2196f3; font-size: 0.95em; color: #1565c0; }
-        
-        #loading { display: none; color: #007bff; font-weight: bold; margin-top: 15px; text-align: center; }
-        #docLoading { display: none; color: #455a64; font-weight: bold; margin-top: 10px; }
-        #summaryLoading { display: none; color: #455a64; font-weight: bold; margin-top: 10px; }
-        input[type="file"] { margin-bottom: 10px; }
-        .meta { color: #607d8b; font-size: 13px; line-height: 1.6; }
-        .section { border-top: 1px solid #e5e7eb; margin-top: 26px; padding-top: 22px; }
-        .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
-        .feature { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
-        .feature strong { display: block; margin-bottom: 6px; color: #263238; }
-        .mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 18px; }
-        .mode-option { border: 1px solid #dbe3ea; border-radius: 10px; padding: 12px; cursor: pointer; background: #fafafa; }
-        .mode-option input { margin-right: 8px; }
-        .mode-option strong { display: block; margin-bottom: 4px; color: #263238; }
-        .mode-option span { display: block; color: #607d8b; font-size: 12px; line-height: 1.5; }
-        .access-box { background: #fff8e1; border: 1px solid #ffe082; border-radius: 10px; padding: 14px; margin-top: 18px; }
-        .access-box label { display: block; font-weight: 700; color: #374151; margin-bottom: 8px; }
-        .access-box input { width: 100%; border: 1px solid #d6c681; border-radius: 8px; padding: 11px 12px; box-sizing: border-box; font-family: inherit; }
-        textarea { width: 100%; min-height: 92px; border: 1px solid #dbe3ea; border-radius: 10px; padding: 12px; resize: vertical; font-family: inherit; line-height: 1.5; box-sizing: border-box; }
-        #chatLoading { display: none; color: #007bff; font-weight: bold; margin-top: 10px; }
-        #chatResult { display: none; margin-top: 18px; }
-        @media (max-width: 640px) {
-            .feature-grid { grid-template-columns: 1fr; }
-            .mode-options { grid-template-columns: 1fr; }
-        }
-    </style>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="card">
-        <h2>Office-Agent</h2>
-        <p>회의와 통화 음성을 요약하고, 업로드한 회사 문서를 기반으로 신입사원 질문에 답하는 업무 지원 도구입니다.</p>
-        <div class="feature-grid">
-            <div class="feature">
-                <strong>음성 요약 및 업무 정리</strong>
-                <span class="meta">회의나 통화 녹음 파일을 넣으면 핵심 요약, 결정 사항, Action Item을 정리합니다.</span>
+    <div class="page">
+        <section class="hero">
+            <p class="eyebrow">Office-Agent Portfolio</p>
+            <h1>문서와 음성을 바로 업무 자산으로 바꾸는 사내 AI 도우미</h1>
+            <p>회의 음성 정리, 문서 기반 질의응답, AI 문서 요약을 한 화면에서 처리합니다. 업로드한 문서를 지식 베이스처럼 관리할 수 있고, 결과는 바로 복사하거나 저장할 수 있습니다.</p>
+            <div class="hero-grid">
+                <div class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>접속 제어</h2>
+                                <p>API 비용 보호를 위해 핵심 기능은 접속 코드로 보호됩니다.</p>
+                            </div>
+                            <span class="pill">안전한 접근</span>
+                        </div>
+                        <div class="access-box">
+                            <label for="accessCode">접속 코드</label>
+                            <input type="password" id="accessCode" autocomplete="off" placeholder="테스트용 접속 코드를 입력해주세요">
+                            <p class="meta-text">요약, 문서 업로드, 챗봇 질문, 음성 분석에 공통으로 사용됩니다.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>현재 상태</h2>
+                                <p>앱이 어떤 자료를 기준으로 답하는지 한눈에 보이도록 정리했습니다.</p>
+                            </div>
+                        </div>
+                        <div class="stat-grid">
+                            <div class="stat">
+                                <span class="label">업로드 문서</span>
+                                <span class="value" id="docCount">{{ document_count }}개</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">LLM 모델</span>
+                                <span class="value">{{ llm_model }}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">임베딩 모델</span>
+                                <span class="value">{{ embedding_model }}</span>
+                            </div>
+                            <div class="stat">
+                                <span class="label">STT 모드</span>
+                                <span class="value">{{ local_stt_model }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="feature">
-                <strong>회사 내규 챗봇</strong>
-                <span class="meta">PDF, DOCX, TXT, MD 문서를 올려 신입사원용 Q&A 자료로 활용합니다.</span>
+        </section>
+
+        <div id="globalAlert" class="alert"></div>
+
+        <div class="layout">
+            <div class="stack">
+                <section class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>문서 지식 베이스</h2>
+                                <p>업로드한 문서를 바로 챗봇과 회의 요약의 참고 문서로 반영합니다.</p>
+                            </div>
+                            <div class="actions">
+                                <button class="btn secondary" onclick="clearDocuments()">전체 비우기</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="docInput">문서 업로드</label>
+                            <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" multiple>
+                        </div>
+                        <div class="actions" style="margin-top: 12px;">
+                            <button class="btn" id="docBtn" onclick="uploadDocuments()">문서 업로드</button>
+                        </div>
+                        <div id="docLoading" class="loading">문서를 읽고 지식 베이스를 갱신하는 중입니다...</div>
+                        <div id="docResult" class="result-box"></div>
+                        <div id="docLibraryEmpty" class="empty" style="display:block; margin-top: 14px;">아직 업로드된 문서가 없습니다.</div>
+                        <div id="docLibraryList" class="doc-list" style="margin-top: 14px;"></div>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>AI 문서 요약</h2>
+                                <p>문서별로 핵심 요약과 액션 아이템을 만들고, 결과를 바로 저장할 수 있습니다.</p>
+                            </div>
+                            <span class="pill">최대 5개 문서</span>
+                        </div>
+                        <div class="field">
+                            <label for="summaryInput">요약할 문서 선택</label>
+                            <input type="file" id="summaryInput" accept=".pdf,.docx,.txt,.md" multiple>
+                        </div>
+                        <div class="actions" style="margin-top: 12px;">
+                            <button class="btn" id="summaryBtn" onclick="summarizeDocuments()">요약하기</button>
+                        </div>
+                        <div id="summaryLoading" class="loading">문서를 읽고 AI 요약을 생성하는 중입니다...</div>
+                        <div id="summaryResultBlock" class="result-block">
+                            <div id="summaryCards" class="summary-list"></div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>통합 결과</h3>
+                                        <p>전체 결과를 한 번에 복사하거나 저장할 수 있습니다.</p>
+                                    </div>
+                                    <div class="inline-actions">
+                                        <button class="btn secondary" onclick="copyText(document.getElementById('summaryCombined').innerText)">전체 복사</button>
+                                        <button class="btn secondary" onclick="downloadTextFile('document-summary.txt', document.getElementById('summaryCombined').innerText)">전체 저장</button>
+                                    </div>
+                                </div>
+                                <div id="summaryCombined" class="result-box" style="display:block;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>음성 요약 및 업무 정리</h2>
+                                <p>회의 음성을 전사하고, 관련 회사 문서를 붙여 요약과 액션 아이템을 정리합니다.</p>
+                            </div>
+                        </div>
+                        <div class="mode-options">
+                            <label class="mode-option">
+                                <input type="radio" name="sttMode" value="local" checked>
+                                <strong>일반 모드</strong>
+                                <span>서버에서 음성을 변환합니다. 비용은 없지만 긴 음성은 느릴 수 있습니다.</span>
+                            </label>
+                            <label class="mode-option">
+                                <input type="radio" name="sttMode" value="openai">
+                                <strong>고성능 모드</strong>
+                                <span>API 기반 음성 변환을 사용합니다. 정확도와 속도를 우선하며 비용이 발생합니다.</span>
+                            </label>
+                        </div>
+                        <div class="field">
+                            <label for="audioInput">음성 파일 선택</label>
+                            <input type="file" id="audioInput" accept="audio/*">
+                        </div>
+                        <div class="actions" style="margin-top: 12px;">
+                            <button class="btn" id="submitBtn" onclick="startProcess()">분석 시작</button>
+                        </div>
+                        <div id="loading" class="loading">음성을 전사하고 업무 요약을 작성하는 중입니다...</div>
+                        <div id="resultArea" class="result-block">
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>요약 및 업무 정리</h3>
+                                        <p>회의 요약은 복사하거나 텍스트 파일로 저장할 수 있습니다.</p>
+                                    </div>
+                                    <div class="inline-actions">
+                                        <button class="btn secondary" onclick="copyText(document.getElementById('summary').innerText)">복사</button>
+                                        <button class="btn secondary" onclick="downloadTextFile('meeting-summary.txt', document.getElementById('summary').innerText)">저장</button>
+                                    </div>
+                                </div>
+                                <div id="summary" class="result-box" style="display:block;"></div>
+                            </div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>검색된 관련 회사 문서</h3>
+                                        <p>RAG 검색 결과 전체 문맥입니다.</p>
+                                    </div>
+                                </div>
+                                <div id="retrievedRule" class="result-box" style="display:block;"></div>
+                            </div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>근거 문서 하이라이트</h3>
+                                        <p>실제로 참고한 문서와 발췌 내용을 카드 형태로 보여줍니다.</p>
+                                    </div>
+                                </div>
+                                <div id="audioSources" class="source-list"></div>
+                            </div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>전체 스크립트</h3>
+                                        <p>전사 결과 원문입니다.</p>
+                                    </div>
+                                    <div class="inline-actions">
+                                        <button class="btn secondary" onclick="copyText(document.getElementById('script').innerText)">복사</button>
+                                        <button class="btn secondary" onclick="downloadTextFile('meeting-script.txt', document.getElementById('script').innerText)">저장</button>
+                                    </div>
+                                </div>
+                                <div id="script" class="result-box" style="display:block;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
-        </div>
 
-        <div class="access-box">
-            <label for="accessCode">접속 코드</label>
-            <input type="password" id="accessCode" autocomplete="off" placeholder="테스트용 접속 코드를 입력해주세요">
-            <p class="meta">API 비용 보호를 위해 요약, 문서 업로드, 챗봇 질문에는 접속 코드가 필요합니다.</p>
-        </div>
-
-        <div class="section">
-            <h3>회사 문서 업로드</h3>
-            <p class="meta">PDF, DOCX, TXT, MD 파일을 업로드하면 사내 내규/가이드라인 검색 대상에 추가됩니다.</p>
-            <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" multiple>
-            <button class="btn" id="docBtn" onclick="uploadDocuments()">문서 업로드</button>
-            <div id="docLoading">문서를 읽고 챗봇 답변 자료를 갱신하는 중입니다...</div>
-            <div id="docResult" class="box rule-box" style="display:none; margin-top: 15px;"></div>
-        </div>
-
-        <div class="section">
-            <h3>AI 문서 요약</h3>
-            <p class="meta">업로드한 문서를 읽고 핵심 요약, 주요 포인트, 액션 아이템을 생성합니다.</p>
-            <input type="file" id="summaryInput" accept=".pdf,.docx,.txt,.md" multiple>
-            <button class="btn" id="summaryBtn" onclick="summarizeDocuments()">요약하기</button>
-            <div id="summaryLoading">문서를 읽고 AI 요약을 생성하는 중입니다...</div>
-            <div id="summaryResult" class="box" style="display:none; margin-top: 15px;"></div>
-        </div>
-
-        <div class="section">
-            <h3>신입사원용 내규 챗봇</h3>
-            <p class="meta">업로드된 회사 문서를 바탕으로 연차, 복지, 재택근무, 비용 정산 같은 질문에 답합니다.</p>
-            <textarea id="chatQuestion" placeholder="예: 신입사원 연차는 어떻게 발생하나요?"></textarea>
-            <button class="btn" id="chatBtn" onclick="askPolicyBot()">질문하기</button>
-            <div id="chatLoading">회사 문서를 검색하고 답변을 생성하는 중입니다...</div>
-            <div id="chatResult">
-                <h3>답변</h3>
-                <div id="chatAnswer" class="box"></div>
-                <h3>참고한 문서</h3>
-                <div id="chatContext" class="box rule-box"></div>
+            <div class="stack">
+                <section class="panel">
+                    <div class="panel-inner">
+                        <div class="section-head">
+                            <div>
+                                <h2>신입사원용 내규 챗봇</h2>
+                                <p>업로드된 회사 문서를 근거로 간단명료하게 답합니다.</p>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="chatQuestion">질문 입력</label>
+                            <textarea id="chatQuestion" placeholder="예: 신입사원 연차는 어떻게 발생하나요?"></textarea>
+                        </div>
+                        <div class="actions" style="margin-top: 12px;">
+                            <button class="btn" id="chatBtn" onclick="askPolicyBot()">질문하기</button>
+                        </div>
+                        <div id="chatLoading" class="loading">회사 문서를 검색하고 답변을 생성하는 중입니다...</div>
+                        <div id="chatResult" class="result-block">
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>답변</h3>
+                                        <p>챗봇 응답을 바로 복사하거나 저장할 수 있습니다.</p>
+                                    </div>
+                                    <div class="inline-actions">
+                                        <button class="btn secondary" onclick="copyText(document.getElementById('chatAnswer').innerText)">복사</button>
+                                        <button class="btn secondary" onclick="downloadTextFile('policy-answer.txt', document.getElementById('chatAnswer').innerText)">저장</button>
+                                    </div>
+                                </div>
+                                <div id="chatAnswer" class="result-box" style="display:block;"></div>
+                            </div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>참고한 전체 문맥</h3>
+                                        <p>챗봇이 참고한 RAG 결과 전체입니다.</p>
+                                    </div>
+                                </div>
+                                <div id="chatContext" class="result-box" style="display:block;"></div>
+                            </div>
+                            <div class="result-section">
+                                <div class="section-head">
+                                    <div>
+                                        <h3>근거 문서 하이라이트</h3>
+                                        <p>문서명과 발췌문으로 근거를 빠르게 확인할 수 있습니다.</p>
+                                    </div>
+                                </div>
+                                <div id="chatSources" class="source-list"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
-        </div>
-        
-        <div class="section">
-            <h3>음성 요약 및 업무 정리</h3>
-            <div class="mode-options">
-                <label class="mode-option">
-                    <input type="radio" name="sttMode" value="local" checked>
-                    <strong>일반 모드</strong>
-                    <span>서버에서 음성을 변환합니다. 비용은 없지만 긴 음성은 느릴 수 있습니다.</span>
-                </label>
-                <label class="mode-option">
-                    <input type="radio" name="sttMode" value="openai">
-                    <strong>고성능 모드</strong>
-                    <span>API 기반 음성 변환을 사용합니다. 정확도와 속도를 우선하며 비용이 발생합니다.</span>
-                </label>
-            </div>
-            <input type="file" id="audioInput" accept="audio/*">
-            <button class="btn" id="submitBtn" onclick="startProcess()">분석 시작</button>
-        </div>
-        
-        <div id="loading">음성 내용을 분석하고 업무 요약을 작성하는 중입니다. 잠시만 기다려주세요.</div>
-
-        <div id="resultArea" class="result-area">
-            <h3>검색된 관련 회사 문서</h3>
-            <div id="retrievedRule" class="box rule-box"></div>
-
-            <h3>요약 및 업무 정리</h3>
-            <div id="summary" class="box"></div>
-            
-            <h3>전체 스크립트</h3>
-            <div id="script" class="box" style="color: #666; font-size: 0.9em;"></div>
         </div>
     </div>
 
-    <script>
-        async function uploadDocuments() {
-            const fileInput = document.getElementById('docInput');
-            const btn = document.getElementById('docBtn');
-            const loading = document.getElementById('docLoading');
-            const resultBox = document.getElementById('docResult');
-
-            if (!fileInput.files.length) return alert("업로드할 문서를 선택해주세요!");
-            const accessCode = getAccessCode();
-            if (!accessCode) return;
-
-            const formData = new FormData();
-            formData.append('access_code', accessCode);
-            Array.from(fileInput.files).forEach((file) => formData.append('files', file));
-
-            loading.style.display = 'block';
-            resultBox.style.display = 'none';
-            btn.disabled = true;
-
-            try {
-                const response = await fetch('/documents', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.detail || "문서 업로드 서버 응답 오류");
-                if (data.error) throw new Error(data.error);
-
-                resultBox.innerText = `${data.files.length}개 파일 업로드 완료\n챗봇 답변 자료가 갱신되었습니다.`;
-                resultBox.style.display = 'block';
-                fileInput.value = '';
-            } catch (e) {
-                console.error(e);
-                alert(`문서 업로드 중 오류가 발생했습니다.\n${e.message}`);
-            } finally {
-                loading.style.display = 'none';
-                btn.disabled = false;
-            }
-        }
-
-        async function startProcess() {
-            const fileInput = document.getElementById('audioInput');
-            const btn = document.getElementById('submitBtn');
-            const loading = document.getElementById('loading');
-            const resultArea = document.getElementById('resultArea');
-            const sttMode = document.querySelector('input[name="sttMode"]:checked').value;
-
-            if (!fileInput.files[0]) return alert("파일을 선택해주세요!");
-            const accessCode = getAccessCode();
-            if (!accessCode) return;
-
-            const formData = new FormData();
-            formData.append('audio_file', fileInput.files[0]);
-            formData.append('stt_mode', sttMode);
-            formData.append('access_code', accessCode);
-
-            // UI 초기화
-            loading.style.display = 'block';
-            resultArea.style.display = 'none';
-            btn.disabled = true;
-
-            try {
-                // 백엔드의 /process 엔드포인트 호출
-                const response = await fetch('/process', { 
-                    method: 'POST', 
-                    body: formData 
-                });
-                
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.detail || "서버 응답 오류");
-
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
-                // 데이터 매핑
-                document.getElementById('retrievedRule').innerText = data.retrieved_rule || "관련 내규를 찾지 못했습니다.";
-                document.getElementById('summary').innerText = data.summary || "요약 결과가 없습니다.";
-                document.getElementById('script').innerText = data.script || "인식된 스크립트가 없습니다.";
-                
-                resultArea.style.display = 'block';
-            } catch (e) {
-                console.error(e);
-                alert(`처리 중 오류가 발생했습니다.\n${e.message}`);
-            } finally {
-                loading.style.display = 'none';
-                btn.disabled = false;
-            }
-        }
-
-        async function summarizeDocuments() {
-            const fileInput = document.getElementById('summaryInput');
-            const btn = document.getElementById('summaryBtn');
-            const loading = document.getElementById('summaryLoading');
-            const resultBox = document.getElementById('summaryResult');
-
-            if (!fileInput.files.length) return alert("요약할 문서를 선택해주세요!");
-            const accessCode = getAccessCode();
-            if (!accessCode) return;
-
-            const formData = new FormData();
-            formData.append('access_code', accessCode);
-            Array.from(fileInput.files).forEach((file) => formData.append('files', file));
-
-            loading.style.display = 'block';
-            resultBox.style.display = 'none';
-            btn.disabled = true;
-
-            try {
-                const response = await fetch('/summarize', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.detail || '요약 서버 응답 오류');
-                if (data.error) throw new Error(data.error);
-
-                resultBox.innerText = data.combined_summary || data.message || '요약 결과가 없습니다.';
-                resultBox.style.display = 'block';
-                fileInput.value = '';
-            } catch (e) {
-                console.error(e);
-                alert(`문서 요약 중 오류가 발생했습니다.\n${e.message}`);
-            } finally {
-                loading.style.display = 'none';
-                btn.disabled = false;
-            }
-        }
-
-        async function askPolicyBot() {
-            const questionInput = document.getElementById('chatQuestion');
-            const btn = document.getElementById('chatBtn');
-            const loading = document.getElementById('chatLoading');
-            const resultArea = document.getElementById('chatResult');
-
-            if (!questionInput.value.trim()) return alert("질문을 입력해주세요!");
-            const accessCode = getAccessCode();
-            if (!accessCode) return;
-
-            const formData = new FormData();
-            formData.append('question', questionInput.value.trim());
-            formData.append('access_code', accessCode);
-
-            loading.style.display = 'block';
-            resultArea.style.display = 'none';
-            btn.disabled = true;
-
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.detail || "챗봇 서버 응답 오류");
-                if (data.error) throw new Error(data.error);
-
-                document.getElementById('chatAnswer').innerText = data.answer || "답변을 생성하지 못했습니다.";
-                document.getElementById('chatContext').innerText = data.retrieved_rule || "참고 문서를 찾지 못했습니다.";
-                resultArea.style.display = 'block';
-            } catch (e) {
-                console.error(e);
-                alert(`질문 처리 중 오류가 발생했습니다.\n${e.message}`);
-            } finally {
-                loading.style.display = 'none';
-                btn.disabled = false;
-            }
-        }
-
-        function getAccessCode() {
-            const accessCode = document.getElementById('accessCode').value.trim();
-            if (!accessCode) {
-                alert("접속 코드를 입력해주세요.");
-                return "";
-            }
-            return accessCode;
-        }
-    </script>
+    <script src="/static/app.js"></script>
 </body>
 </html>
