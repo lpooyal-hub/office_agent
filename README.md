@@ -6,6 +6,7 @@ Office-Agent는 두 가지 핵심 기능을 제공합니다.
 
 1. 회의나 통화 음성 파일을 업로드하면 STT로 텍스트를 추출하고, 핵심 요약과 Action Item을 정리합니다.
 2. 회사 내규와 가이드라인 문서를 업로드하면 신입사원과 직장인을 위한 맞춤형 Q&A 챗봇으로 활용합니다.
+3. 문서를 일회성으로 업로드하면 핵심 요약, 주요 포인트, Action Item을 생성합니다.
 
 ---
 
@@ -38,6 +39,7 @@ Office-Agent는 로컬 임베딩 모델과 OpenAI API를 조합한 하이브리�
 - PDF / DOCX / TXT / MD 문서 업로드
 - RAG 기반 회의록 생성
 - 신입사원용 회사 내규 챗봇
+- AI 문서 요약 (최대 5개 파일, 업로드 후 자동 삭제)
 - 로컬 기반 임베딩 처리 구조
 - 접속 코드, 요청 제한, 업로드 용량 제한 기반 공개 데모 보호
 - OCI ARM 서버 기반 운영 환경
@@ -104,6 +106,7 @@ RATE_LIMIT_REQUESTS=20
 RATE_LIMIT_WINDOW_SECONDS=3600
 MAX_AUDIO_UPLOAD_MB=25
 MAX_DOCUMENT_UPLOAD_MB=10
+MAX_SUMMARY_DOCUMENTS=5
 ```
 
 `.env.example` 파일을 참고해 `.env`를 생성합니다.

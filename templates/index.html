@@ -19,6 +19,7 @@
         
         #loading { display: none; color: #007bff; font-weight: bold; margin-top: 15px; text-align: center; }
         #docLoading { display: none; color: #455a64; font-weight: bold; margin-top: 10px; }
+        #summaryLoading { display: none; color: #455a64; font-weight: bold; margin-top: 10px; }
         input[type="file"] { margin-bottom: 10px; }
         .meta { color: #607d8b; font-size: 13px; line-height: 1.6; }
         .section { border-top: 1px solid #e5e7eb; margin-top: 26px; padding-top: 22px; }
@@ -70,6 +71,15 @@
             <button class="btn" id="docBtn" onclick="uploadDocuments()">문서 업로드</button>
             <div id="docLoading">문서를 읽고 챗봇 답변 자료를 갱신하는 중입니다...</div>
             <div id="docResult" class="box rule-box" style="display:none; margin-top: 15px;"></div>
+        </div>
+
+        <div class="section">
+            <h3>AI 문서 요약</h3>
+            <p class="meta">업로드한 문서를 읽고 핵심 요약, 주요 포인트, 액션 아이템을 생성합니다.</p>
+            <input type="file" id="summaryInput" accept=".pdf,.docx,.txt,.md" multiple>
+            <button class="btn" id="summaryBtn" onclick="summarizeDocuments()">요약하기</button>
+            <div id="summaryLoading">문서를 읽고 AI 요약을 생성하는 중입니다...</div>
+            <div id="summaryResult" class="box" style="display:none; margin-top: 15px;"></div>
         </div>
 
         <div class="section">
@@ -203,6 +213,46 @@
             } catch (e) {
                 console.error(e);
                 alert(`처리 중 오류가 발생했습니다.\n${e.message}`);
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
+        async function summarizeDocuments() {
+            const fileInput = document.getElementById('summaryInput');
+            const btn = document.getElementById('summaryBtn');
+            const loading = document.getElementById('summaryLoading');
+            const resultBox = document.getElementById('summaryResult');
+
+            if (!fileInput.files.length) return alert("요약할 문서를 선택해주세요!");
+            const accessCode = getAccessCode();
+            if (!accessCode) return;
+
+            const formData = new FormData();
+            formData.append('access_code', accessCode);
+            Array.from(fileInput.files).forEach((file) => formData.append('files', file));
+
+            loading.style.display = 'block';
+            resultBox.style.display = 'none';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/summarize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || '요약 서버 응답 오류');
+                if (data.error) throw new Error(data.error);
+
+                resultBox.innerText = data.combined_summary || data.message || '요약 결과가 없습니다.';
+                resultBox.style.display = 'block';
+                fileInput.value = '';
+            } catch (e) {
+                console.error(e);
+                alert(`문서 요약 중 오류가 발생했습니다.\n${e.message}`);
             } finally {
                 loading.style.display = 'none';
                 btn.disabled = false;
