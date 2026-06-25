@@ -20,7 +20,16 @@ services:
       RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-3600}
       MAX_AUDIO_UPLOAD_MB: ${MAX_AUDIO_UPLOAD_MB:-25}
       MAX_DOCUMENT_UPLOAD_MB: ${MAX_DOCUMENT_UPLOAD_MB:-10}
+      MAX_SUMMARY_DOCUMENTS: ${MAX_SUMMARY_DOCUMENTS:-5}
+      CHROMA_URL: ${CHROMA_URL:-http://host.docker.internal:9001}
+      CHROMA_TENANT: ${CHROMA_TENANT:-default_tenant}
+      CHROMA_DATABASE: ${CHROMA_DATABASE:-default_database}
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-office_agent_documents}
+      CHROMA_TIMEOUT_SECONDS: ${CHROMA_TIMEOUT_SECONDS:-15}
+      CHROMA_TOKEN: ${CHROMA_TOKEN:-}
     volumes:
       - ./uploads:/app/uploads
       - ./documents:/app/documents
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: always

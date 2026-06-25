@@ -131,7 +131,7 @@ def list_stored_documents(document_folder):
     return documents
 
 
-def delete_document_file(document_folder, stored_name):
+def get_document_path(document_folder, stored_name):
     safe_name = get_safe_upload_filename(stored_name)
     if safe_name != stored_name:
         raise ValueError("잘못된 문서 식별자입니다.")
@@ -139,9 +139,13 @@ def delete_document_file(document_folder, stored_name):
     target_path = document_folder / safe_name
     if not target_path.exists() or not target_path.is_file():
         raise FileNotFoundError("삭제할 문서를 찾지 못했습니다.")
+    return target_path
 
+
+def delete_document_file(document_folder, stored_name):
+    target_path = get_document_path(document_folder, stored_name)
     target_path.unlink()
-    return get_display_filename(safe_name)
+    return get_display_filename(target_path.name)
 
 
 def clear_document_library(document_folder):

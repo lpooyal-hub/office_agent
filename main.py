@@ -24,11 +24,13 @@ from services.ai_client import (
     summarize_document_text,
     transcribe_with_openai,
 )
+from services.chroma_store import ChromaStore
 from services.document_library import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     clear_document_library,
     delete_document_file,
     get_display_filename,
+    get_document_path,
     get_safe_upload_filename,
     list_stored_documents,
     read_document_text,
@@ -61,6 +63,12 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
 MAX_AUDIO_UPLOAD_MB = int(os.getenv("MAX_AUDIO_UPLOAD_MB", "25"))
 MAX_DOCUMENT_UPLOAD_MB = int(os.getenv("MAX_DOCUMENT_UPLOAD_MB", "10"))
 MAX_SUMMARY_DOCUMENTS = int(os.getenv("MAX_SUMMARY_DOCUMENTS", "5"))
+CHROMA_URL = os.getenv("CHROMA_URL", "http://localhost:9001")
+CHROMA_TENANT = os.getenv("CHROMA_TENANT", "default_tenant")
+CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "default_database")
+CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "office_agent_documents")
+CHROMA_TIMEOUT_SECONDS = int(os.getenv("CHROMA_TIMEOUT_SECONDS", "15"))
+CHROMA_TOKEN = os.getenv("CHROMA_TOKEN", "")
 
 DEFAULT_COMPANY_RULES = [
     "연차 휴가는 1년 미만 근로자의 경우 1개월 개근 시 1일이 발생하며, 총 11일 한도입니다.",
@@ -73,7 +81,20 @@ DEFAULT_COMPANY_RULES = [
 _whisper_model = None
 _model_lock = RLock()
 _request_history = defaultdict(deque)
-retriever = DocumentRetriever(DOCUMENT_FOLDER, EMBEDDING_MODEL, DEFAULT_COMPANY_RULES)
+chroma_store = ChromaStore(
+    base_url=CHROMA_URL,
+    tenant=CHROMA_TENANT,
+    database=CHROMA_DATABASE,
+    collection_name=CHROMA_COLLECTION,
+    timeout_seconds=CHROMA_TIMEOUT_SECONDS,
+    token=CHROMA_TOKEN,
+)
+retriever = DocumentRetriever(
+    DOCUMENT_FOLDER,
+    EMBEDDING_MODEL,
+    DEFAULT_COMPANY_RULES,
+    chroma_store,
+)
 
 
 def get_whisper_model():
@@ -177,7 +198,9 @@ async def health():
         "llm_model": OPENAI_MODEL,
         "openai_stt_model": OPENAI_STT_MODEL,
         "local_stt_model": WHISPER_MODEL,
-        "document_chunks": len(retriever.get_rule_chunks()),
+        "document_chunks": retriever.get_rule_chunk_count(),
+        "vector_store": "chroma",
+        "chroma_collection": CHROMA_COLLECTION,
     }
 
 
@@ -229,6 +252,19 @@ async def upload_documents(
         logging.error("Document upload error: %s", str(exc))
         raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
 
+    try:
+        retriever.index_documents(saved_paths)
+    except Exception as exc:
+        for path in saved_paths:
+            try:
+                retriever.remove_document(path.name)
+            except Exception:
+                logging.warning("Document index rollback skipped: %s", path.name)
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        logging.error("Document index error: %s", str(exc))
+        raise HTTPException(status_code=502, detail="문서 검색 인덱스 갱신 중 오류가 발생했습니다.") from exc
+
     retriever.invalidate()
     documents = list_stored_documents(DOCUMENT_FOLDER)
     return {
@@ -240,7 +276,7 @@ async def upload_documents(
             }
             for path in saved_paths
         ],
-        "document_chunks": len(retriever.get_rule_chunks()),
+        "document_chunks": retriever.get_rule_chunk_count(),
         "documents": documents,
         "count": len(documents),
     }
@@ -254,11 +290,16 @@ async def remove_document(
 ):
     protect_request(request, access_code)
     try:
+        target_path = get_document_path(DOCUMENT_FOLDER, stored_name)
+        retriever.remove_document(target_path.name)
         display_name = delete_document_file(DOCUMENT_FOLDER, stored_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.error("Document delete error: %s", str(exc))
+        raise HTTPException(status_code=502, detail="문서 인덱스 삭제 중 오류가 발생했습니다.") from exc
 
     retriever.invalidate()
     documents = list_stored_documents(DOCUMENT_FOLDER)
@@ -275,7 +316,13 @@ async def clear_documents(
     access_code: str,
 ):
     protect_request(request, access_code)
-    deleted = clear_document_library(DOCUMENT_FOLDER)
+    try:
+        retriever.clear_documents()
+        deleted = clear_document_library(DOCUMENT_FOLDER)
+    except Exception as exc:
+        logging.error("Document clear error: %s", str(exc))
+        raise HTTPException(status_code=502, detail="문서 인덱스 초기화 중 오류가 발생했습니다.") from exc
+
     retriever.invalidate()
     return {
         "message": "문서 보관함을 비웠습니다.",

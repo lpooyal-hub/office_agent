@@ -9,22 +9,24 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     SentenceTransformer = None
 
-try:
-    from sklearn.metrics.pairwise import cosine_similarity
-except ImportError:  # pragma: no cover - optional dependency
-    cosine_similarity = None
-
-from services.document_library import list_stored_documents, read_document_text, split_text
+from services.document_library import (
+    get_display_filename,
+    list_stored_documents,
+    read_document_text,
+    split_text,
+)
 
 
 class DocumentRetriever:
-    def __init__(self, document_folder, embedding_model, default_rules):
+    def __init__(self, document_folder, embedding_model, default_rules, chroma_store):
         self.document_folder = document_folder
         self.embedding_model = embedding_model
         self.default_rules = list(default_rules)
+        self.chroma_store = chroma_store
         self._embedder = None
-        self._rule_chunks = None
-        self._rule_embeddings = None
+        self._default_rule_embeddings = None
+        self._default_rule_chunks = list(default_rules)
+        self._bootstrapped = False
         self._lock = RLock()
 
     def get_embedder(self):
@@ -38,66 +40,171 @@ class DocumentRetriever:
                     self._embedder = SentenceTransformer(self.embedding_model, device="cpu")
         return self._embedder
 
-    def load_rule_chunks(self):
-        chunks = list(self.default_rules)
-        for document in reversed(list_stored_documents(self.document_folder)):
-            path = self.document_folder / document["stored_name"]
-            try:
-                text = read_document_text(path)
-            except Exception as exc:
-                logging.warning("Document load failed: %s (%s)", path.name, exc)
-                continue
-
-            for chunk in split_text(text):
-                chunks.append(f"[{document['display_name']}]\n{chunk}")
-        return chunks
-
-    def get_rule_chunks(self):
-        if self._rule_chunks is None:
+    def get_default_rule_embeddings(self):
+        if self._default_rule_embeddings is None:
             with self._lock:
-                if self._rule_chunks is None:
-                    self._rule_chunks = self.load_rule_chunks()
-        return self._rule_chunks
-
-    def get_rule_embeddings(self):
-        if self._rule_embeddings is None:
-            with self._lock:
-                if self._rule_embeddings is None:
-                    self._rule_embeddings = self.get_embedder().encode(
-                        self.get_rule_chunks(),
+                if self._default_rule_embeddings is None:
+                    self._default_rule_embeddings = self.get_embedder().encode(
+                        self._default_rule_chunks,
                         normalize_embeddings=True,
                     )
-        return self._rule_embeddings
+        return self._default_rule_embeddings
 
     def invalidate(self):
+        self._bootstrapped = False
+
+    def build_records_for_document(self, path, text=None):
+        text = text if text is not None else read_document_text(path)
+        chunks = split_text(text)
+        if not chunks:
+            return []
+
+        embeddings = self.get_embedder().encode(chunks, normalize_embeddings=True)
+        records = []
+        for index, chunk in enumerate(chunks):
+            records.append(
+                {
+                    "id": f"{path.name}::chunk::{index}",
+                    "embedding": embeddings[index].tolist(),
+                    "document": chunk,
+                    "metadata": {
+                        "stored_name": path.name,
+                        "display_name": get_display_filename(path.name),
+                        "chunk_index": index,
+                        "source_kind": "document",
+                    },
+                }
+            )
+        return records
+
+    def index_documents(self, paths):
+        all_records = []
+        for path in paths:
+            all_records.extend(self.build_records_for_document(path))
+
+        self.chroma_store.upsert_records(all_records)
+        self._bootstrapped = True
+
+    def remove_document(self, stored_name):
+        self.chroma_store.delete_by_where({"stored_name": stored_name})
+
+    def clear_documents(self):
+        self.chroma_store.clear_collection()
+        self._bootstrapped = True
+
+    def bootstrap_documents(self):
+        if self._bootstrapped:
+            return
+
         with self._lock:
-            self._rule_chunks = None
-            self._rule_embeddings = None
+            if self._bootstrapped:
+                return
+
+            records = []
+            for document in list_stored_documents(self.document_folder):
+                path = self.document_folder / document["stored_name"]
+                try:
+                    records.extend(self.build_records_for_document(path))
+                except Exception as exc:
+                    logging.warning("Document bootstrap failed: %s (%s)", path.name, exc)
+
+            if records:
+                self.chroma_store.upsert_records(records)
+            self._bootstrapped = True
+
+    def get_rule_chunk_count(self):
+        chunk_count = len(self.default_rules)
+        for document in list_stored_documents(self.document_folder):
+            path = self.document_folder / document["stored_name"]
+            try:
+                chunk_count += len(split_text(read_document_text(path)))
+            except Exception as exc:
+                logging.warning("Document chunk count failed: %s (%s)", path.name, exc)
+        return chunk_count
 
     def get_relevant_rules(self, query, threshold=0.35, top_k=3):
-        chunks = self.get_rule_chunks()
-        if not chunks:
+        self.bootstrap_documents()
+
+        query_embedding = self.get_embedder().encode([query], normalize_embeddings=True)[0]
+        default_matches = self.get_default_rule_matches(query_embedding, query)
+        document_matches = self.get_document_matches(query_embedding)
+        combined_matches = default_matches + document_matches
+
+        if not combined_matches:
             return "관련된 내규를 찾을 수 없습니다.", []
 
-        if cosine_similarity is None:
-            raise RuntimeError("scikit-learn 패키지가 설치되지 않았습니다.")
+        lexical_scores = get_lexical_scores(query, [item["chunk"] for item in combined_matches])
+        for index, lexical_score in enumerate(lexical_scores):
+            combined_matches[index]["rank_score"] = combined_matches[index]["score"] + float(lexical_score)
 
-        query_vector = self.get_embedder().encode([query], normalize_embeddings=True)
-        scores = cosine_similarity(query_vector, self.get_rule_embeddings())[0]
-        lexical_scores = get_lexical_scores(query, chunks)
-        combined_scores = scores + lexical_scores
-        ranked_indexes = np.argsort(combined_scores)[::-1][:top_k]
+        ranked_matches = sorted(
+            combined_matches,
+            key=lambda item: item["rank_score"],
+            reverse=True,
+        )
+
+        selected = []
+        for match in ranked_matches:
+            if match["score"] >= threshold or not selected:
+                selected.append((match["chunk"], match["score"]))
+            if len(selected) >= top_k:
+                break
+
+        rendered = "\n\n".join(
+            f"- {document}\n  유사도: {score:.2f}" for document, score in selected
+        )
+        return rendered, selected
+
+    def get_default_rule_matches(self, query_embedding, query, limit=5):
+        default_rule_embeddings = self.get_default_rule_embeddings()
+        similarities = np.dot(default_rule_embeddings, query_embedding)
+        lexical_scores = get_lexical_scores(query, self._default_rule_chunks)
+        ranked_indexes = np.argsort(similarities + lexical_scores)[::-1][:limit]
 
         matches = []
         for index in ranked_indexes:
-            score = float(scores[index])
-            if score >= threshold or not matches:
-                matches.append((chunks[index], score))
+            chunk = self._default_rule_chunks[index]
+            matches.append(
+                {
+                    "chunk": chunk,
+                    "score": float(similarities[index]),
+                    "rank_score": float(similarities[index]),
+                }
+            )
+        return matches
 
-        rendered = "\n\n".join(
-            f"- {document}\n  유사도: {score:.2f}" for document, score in matches
-        )
-        return rendered, matches
+    def get_document_matches(self, query_embedding, limit=8):
+        response = self.chroma_store.query(query_embedding.tolist(), n_results=limit)
+        ids = response.get("ids") or []
+        documents = response.get("documents") or []
+        metadatas = response.get("metadatas") or []
+        distances = response.get("distances") or []
+
+        if not ids or not ids[0]:
+            return []
+
+        matches = []
+        for index, _ in enumerate(ids[0]):
+            metadata = (metadatas[0][index] if metadatas and metadatas[0] else {}) or {}
+            document_text = documents[0][index] if documents and documents[0] else ""
+            distance = distances[0][index] if distances and distances[0] else None
+            score = convert_distance_to_score(distance)
+            display_name = metadata.get("display_name") or metadata.get("stored_name") or "업로드 문서"
+            rendered_chunk = f"[{display_name}]\n{document_text}"
+            matches.append(
+                {
+                    "chunk": rendered_chunk,
+                    "score": score,
+                    "rank_score": score,
+                }
+            )
+        return matches
+
+
+def convert_distance_to_score(distance):
+    if distance is None:
+        return 0.0
+    return max(0.0, 1.0 - float(distance))
 
 
 def parse_rule_match(chunk_text, score):
