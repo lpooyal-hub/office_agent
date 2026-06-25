@@ -115,6 +115,11 @@ Office-Agent는 로컬 임베딩 모델, `ChromaDB`, OpenAI API를 조합한 하
 
 ```text
 office-agent/
+├── frontend/
+│   ├── src/
+│   ├── index.html
+│   ├── package.json
+│   └── vite.config.mjs
 ├── main.py
 ├── services/
 │   ├── ai_client.py
@@ -122,8 +127,7 @@ office-agent/
 │   ├── document_library.py
 │   └── rag_service.py
 ├── static/
-│   ├── app.js
-│   └── style.css
+│   └── app/
 ├── templates/
 │   └── index.html
 ├── uploads/
@@ -144,6 +148,18 @@ office-agent/
 
 ```bash
 pip install -r requirements.txt
+```
+
+```bash
+cd frontend
+npm install
+```
+
+### Frontend Build
+
+```bash
+cd frontend
+npm run build
 ```
 
 ### Environment

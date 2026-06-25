@@ -9,7 +9,7 @@ from typing import List
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -177,17 +177,11 @@ def validate_document_uploads(files):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
-            "document_count": len(list_stored_documents(DOCUMENT_FOLDER)),
-            "embedding_model": EMBEDDING_MODEL,
-            "llm_model": OPENAI_MODEL,
-            "openai_stt_model": OPENAI_STT_MODEL,
-            "local_stt_model": WHISPER_MODEL,
-        },
-    )
+    built_index = STATIC_FOLDER / "app" / "index.html"
+    if built_index.exists():
+        return FileResponse(built_index)
+
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/health")
