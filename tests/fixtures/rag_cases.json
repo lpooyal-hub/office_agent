@@ -1,0 +1,56 @@
+[
+  {
+    "name": "annual_leave_keyword_boost",
+    "question": "1년 미만 직원 연차 휴가는 며칠인가요?",
+    "expected_document": "휴가 규정",
+    "expected_keywords": ["연차", "1년", "휴가"],
+    "min_similarity": 0.42,
+    "semantic_matches": [
+      {
+        "chunk": "[복지 제도]\n식대 지원은 매월 20만 원이며 복지카드로 결제합니다.",
+        "semantic_score": 0.71,
+        "source_kind": "document",
+        "chunk_index": 2
+      },
+      {
+        "chunk": "[휴가 규정]\n1년 미만 근로자는 1개월 개근 시 연차 휴가 1일이 발생하며 최대 11일입니다.",
+        "semantic_score": 0.58,
+        "source_kind": "document",
+        "chunk_index": 0
+      },
+      {
+        "chunk": "재택근무는 매주 수요일을 권장하며 사전 협의가 필요합니다.",
+        "semantic_score": 0.49,
+        "source_kind": "default_rule",
+        "chunk_index": 3
+      }
+    ]
+  },
+  {
+    "name": "remote_work_default_rule",
+    "question": "재택근무 수요일 신청은 누구와 협의하나요?",
+    "expected_document": "기본 내규",
+    "expected_keywords": ["재택근무", "수요일", "협의"],
+    "min_similarity": 0.5,
+    "semantic_matches": [
+      {
+        "chunk": "업무용 도서 구입비는 월 5만 원 한도 내에서 실비 정산 가능합니다.",
+        "semantic_score": 0.66,
+        "source_kind": "default_rule",
+        "chunk_index": 4
+      },
+      {
+        "chunk": "재택근무는 매주 수요일을 권장하며, 부서장과의 사전 협의가 필요합니다.",
+        "semantic_score": 0.52,
+        "source_kind": "default_rule",
+        "chunk_index": 3
+      },
+      {
+        "chunk": "[경조사 규정]\n본인 결혼은 5일의 유급 휴가를 부여합니다.",
+        "semantic_score": 0.46,
+        "source_kind": "document",
+        "chunk_index": 1
+      }
+    ]
+  }
+]
