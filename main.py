@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import os
 import secrets
 import time
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover - optional dependency
     whisper = None
 
 from services.ai_client import (
+    build_summary_prompt,
     generate_minutes,
     generate_policy_answer,
     build_summary_prompt,
@@ -28,15 +30,13 @@ from services.ai_client import (
 from services.chroma_store import ChromaStore
 from services.document_library import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
-    clear_document_library,
-    delete_document_file,
     get_display_filename,
     get_document_path,
     get_safe_upload_filename,
-    list_stored_documents,
     read_document_text,
     save_upload_file,
 )
+from services.document_repository import DocumentRepository
 from services.jobs import JobStore
 from services.rag_service import DocumentRetriever, parse_rule_match
 
@@ -91,6 +91,7 @@ chroma_store = ChromaStore(
     timeout_seconds=CHROMA_TIMEOUT_SECONDS,
     token=CHROMA_TOKEN,
 )
+document_repository = DocumentRepository(DOCUMENT_FOLDER / "metadata.jsonl")
 retriever = DocumentRetriever(
     DOCUMENT_FOLDER,
     EMBEDDING_MODEL,
@@ -315,7 +316,7 @@ async def index(request: Request):
         "index.html",
         {
             "request": request,
-            "document_count": len(list_stored_documents(DOCUMENT_FOLDER)),
+            "document_count": len(list_repository_documents()),
             "embedding_model": EMBEDDING_MODEL,
             "llm_model": OPENAI_MODEL,
             "openai_stt_model": OPENAI_STT_MODEL,
@@ -338,6 +339,32 @@ async def health():
     }
 
 
+def get_existing_document_names():
+    return {
+        path.name
+        for path in DOCUMENT_FOLDER.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_DOCUMENT_EXTENSIONS
+    }
+
+
+def list_repository_documents():
+    existing_names = get_existing_document_names()
+    documents = document_repository.list_documents(existing_names=existing_names)
+    known_names = {document["stored_name"] for document in documents}
+    for stored_name in existing_names - known_names:
+        path = DOCUMENT_FOLDER / stored_name
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        document_repository.create_document(
+            stored_name=path.name,
+            display_name=get_display_filename(path.name),
+            content_type=content_type,
+            size_bytes=path.stat().st_size,
+            tags=[],
+            owner="",
+            description="",
+        )
+        document_repository.update_index_status(path.name, "indexed")
+    return document_repository.list_documents(existing_names=existing_names)
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     job = job_store.get(job_id)
@@ -348,7 +375,7 @@ async def get_job(job_id: str):
 
 @app.get("/documents")
 async def get_documents():
-    documents = list_stored_documents(DOCUMENT_FOLDER)
+    documents = list_repository_documents()
     return {
         "documents": documents,
         "count": len(documents),
@@ -361,13 +388,40 @@ async def upload_documents(
     background_tasks: BackgroundTasks,
     access_code: str = Form(""),
     files: List[UploadFile] = File(...),
+    tags: str = Form(""),
+    owner: str = Form(""),
+    description: str = Form(""),
 ):
     protect_request(request, access_code)
     validate_document_uploads(files)
 
     saved_paths = []
+    upload_tags = document_repository.parse_tags(tags)
     try:
         for file in files:
+            content_type = file.content_type or "application/octet-stream"
+            saved_path = save_upload_file(
+                file,
+                DOCUMENT_FOLDER,
+                MAX_DOCUMENT_UPLOAD_MB,
+                preserve_name=True,
+            )
+            saved_paths.append(saved_path)
+
+            text = read_document_text(saved_path)
+            if not text.strip():
+                raise_upload_error(
+                    f"문서에서 읽을 수 있는 내용이 없습니다: {get_display_filename(saved_path.name)}"
+                )
+
+            document_repository.create_document(
+                stored_name=saved_path.name,
+                display_name=get_display_filename(saved_path.name),
+                content_type=content_type,
+                size_bytes=saved_path.stat().st_size,
+                tags=upload_tags,
+                owner=owner.strip(),
+                description=description.strip(),
             saved_paths.append(
                 save_upload_file(
                     file,
@@ -379,7 +433,58 @@ async def upload_documents(
     except ValueError as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
         raise_upload_error(str(exc), status_code=413)
+    except HTTPException:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
+        raise
+    except Exception as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
+        logging.error("Document upload error: %s", str(exc))
+        raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
+
+    try:
+        retriever.index_documents(saved_paths)
+    except Exception as exc:
+        for path in saved_paths:
+            try:
+                retriever.remove_document(path.name)
+            except Exception:
+                logging.warning("Document index rollback skipped: %s", path.name)
+            document_repository.update_index_status(path.name, "failed")
+        retriever.invalidate()
+        documents = list_repository_documents()
+        uploaded_names = {path.name for path in saved_paths}
+        logging.error("Document index error: %s", str(exc))
+        return {
+            "message": "문서는 저장했지만 검색 인덱스 갱신에 실패했습니다.",
+            "files": [
+                document for document in documents if document["stored_name"] in uploaded_names
+            ],
+            "document_chunks": retriever.get_rule_chunk_count(),
+            "documents": documents,
+            "count": len(documents),
+        }
+
+    for path in saved_paths:
+        document_repository.update_index_status(path.name, "indexed")
+
+    retriever.invalidate()
+    documents = list_repository_documents()
+    uploaded_names = {path.name for path in saved_paths}
+    return {
+        "message": "문서 업로드와 지식 베이스 갱신이 완료되었습니다.",
+        "files": [
+            document for document in documents if document["stored_name"] in uploaded_names
+        ],
+        "document_chunks": retriever.get_rule_chunk_count(),
+        "documents": documents,
+        "count": len(documents),
+    }
     except Exception as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
@@ -401,7 +506,9 @@ async def remove_document(
     try:
         target_path = get_document_path(DOCUMENT_FOLDER, stored_name)
         retriever.remove_document(target_path.name)
-        display_name = delete_document_file(DOCUMENT_FOLDER, stored_name)
+        display_name = get_display_filename(target_path.name)
+        target_path.unlink()
+        document_repository.delete_document(stored_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -411,7 +518,7 @@ async def remove_document(
         raise HTTPException(status_code=502, detail="문서 인덱스 삭제 중 오류가 발생했습니다.") from exc
 
     retriever.invalidate()
-    documents = list_stored_documents(DOCUMENT_FOLDER)
+    documents = list_repository_documents()
     return {
         "message": f"{display_name} 문서를 삭제했습니다.",
         "documents": documents,
@@ -426,8 +533,15 @@ async def clear_documents(
 ):
     protect_request(request, access_code)
     try:
+        documents = list_repository_documents()
         retriever.clear_documents()
-        deleted = clear_document_library(DOCUMENT_FOLDER)
+        deleted = []
+        for document in documents:
+            path = DOCUMENT_FOLDER / document["stored_name"]
+            if path.exists():
+                path.unlink()
+                deleted.append(document["display_name"])
+            document_repository.delete_document(document["stored_name"])
     except Exception as exc:
         logging.error("Document clear error: %s", str(exc))
         raise HTTPException(status_code=502, detail="문서 인덱스 초기화 중 오류가 발생했습니다.") from exc
