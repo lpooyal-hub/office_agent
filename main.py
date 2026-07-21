@@ -606,7 +606,7 @@ async def chat_policy(
         return {
             "answer": answer,
             "retrieved_rule": related_rules,
-            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+            "sources": [parse_rule_match(match) for match in matches],
         }
     except Exception as exc:
         logging.error("Chat error: %s", str(exc))
@@ -630,6 +630,32 @@ async def process_audio(
     except ValueError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
+    try:
+        full_script = transcribe_audio(file_path, stt_mode)
+
+        if not full_script:
+            return {"script": "인식된 음성 없음", "summary": "내용 없음", "retrieved_rule": "N/A"}
+
+        related_rules, matches = retriever.get_relevant_rules(full_script)
+
+        logging.info("OpenAI minutes generation start")
+        summary = generate_minutes(OPENAI_API_KEY, OPENAI_MODEL, full_script, related_rules)
+
+        return {
+            "script": full_script,
+            "summary": summary,
+            "retrieved_rule": related_rules,
+            "stt_mode": stt_mode,
+            "sources": [parse_rule_match(match) for match in matches],
+        }
+
+    except Exception as exc:
+        logging.error("Error: %s", str(exc))
+        raise HTTPException(status_code=502, detail="음성 분석 중 오류가 발생했습니다.") from exc
+
+    finally:
+        if file_path.exists():
+            file_path.unlink()
     job = job_store.create()
     background_tasks.add_task(run_audio_process_job, job.job_id, file_path, stt_mode)
     return {"job_id": job.job_id, "status": job.status.value}

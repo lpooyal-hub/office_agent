@@ -1,5 +1,6 @@
 import unittest
 
+from services.ai_client import build_summary_prompt
 from services.ai_client import (
     build_summary_prompt,
     extract_response_text,

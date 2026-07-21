@@ -365,9 +365,28 @@ textarea {
 
 .doc-sub,
 .source-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-top: 6px;
     color: var(--muted);
     font-size: 13px;
+}
+
+.source-meta span,
+.source-reason {
+    border: 1px solid var(--info-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.56);
+    padding: 4px 8px;
+}
+
+.source-reason {
+    display: inline-flex;
+    margin-top: 10px;
+    color: #36584d;
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 .source-card {
