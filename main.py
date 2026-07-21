@@ -1,6 +1,5 @@
 import logging
 import os
-import secrets
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -19,6 +18,7 @@ except ImportError:  # pragma: no cover - optional dependency
     whisper = None
 
 from services.ai_client import (
+    build_summary_prompt,
     generate_minutes,
     generate_policy_answer,
     summarize_document_text,
@@ -34,9 +34,12 @@ from services.document_library import (
     get_safe_upload_filename,
     list_stored_documents,
     read_document_text,
+    save_document_metadata,
+    get_metadata_path,
     save_upload_file,
 )
 from services.rag_service import DocumentRetriever, parse_rule_match
+from services.auth import authenticate_access_code, load_role_codes, require_role
 
 load_dotenv()
 
@@ -57,7 +60,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jhgan/ko-sroberta-multitask")
-ACCESS_CODE = os.getenv("ACCESS_CODE", "")
+ROLE_ACCESS_CODES = load_role_codes()
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "20"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
 MAX_AUDIO_UPLOAD_MB = int(os.getenv("MAX_AUDIO_UPLOAD_MB", "25"))
@@ -129,16 +132,6 @@ def get_client_id(request):
     return "unknown"
 
 
-def require_access_code(access_code):
-    if not ACCESS_CODE:
-        raise HTTPException(
-            status_code=503,
-            detail="서비스 접속 코드가 설정되어 있지 않습니다.",
-        )
-    if not secrets.compare_digest(access_code or "", ACCESS_CODE):
-        raise HTTPException(status_code=403, detail="접속 코드가 올바르지 않습니다.")
-
-
 def enforce_rate_limit(client_id):
     now = time.time()
     history = _request_history[client_id]
@@ -155,9 +148,11 @@ def enforce_rate_limit(client_id):
     history.append(now)
 
 
-def protect_request(request, access_code):
-    require_access_code(access_code)
+def protect_request(request, access_code, minimum_role="viewer"):
+    user = authenticate_access_code(access_code, ROLE_ACCESS_CODES)
+    require_role(user, minimum_role)
     enforce_rate_limit(get_client_id(request))
+    return user
 
 
 def raise_upload_error(message, status_code=400):
@@ -219,7 +214,7 @@ async def upload_documents(
     access_code: str = Form(""),
     files: List[UploadFile] = File(...),
 ):
-    protect_request(request, access_code)
+    user = protect_request(request, access_code, minimum_role="editor")
     validate_document_uploads(files)
 
     saved_paths = []
@@ -238,22 +233,36 @@ async def upload_documents(
                 raise_upload_error(
                     f"문서에서 읽을 수 있는 내용이 없습니다: {get_display_filename(saved_path.name)}"
                 )
+            save_document_metadata(
+                saved_path,
+                owner=user.owner,
+                visibility="restricted",
+                allowed_roles=["editor", "admin"],
+            )
     except ValueError as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            get_metadata_path(path).unlink(missing_ok=True)
         raise_upload_error(str(exc), status_code=413)
     except HTTPException:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            get_metadata_path(path).unlink(missing_ok=True)
         raise
     except Exception as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            get_metadata_path(path).unlink(missing_ok=True)
         logging.error("Document upload error: %s", str(exc))
         raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
 
     try:
-        retriever.index_documents(saved_paths)
+        retriever.index_documents(
+            saved_paths,
+            owner=user.owner,
+            visibility="restricted",
+            allowed_roles=["editor", "admin"],
+        )
     except Exception as exc:
         for path in saved_paths:
             try:
@@ -262,6 +271,7 @@ async def upload_documents(
                 logging.warning("Document index rollback skipped: %s", path.name)
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            get_metadata_path(path).unlink(missing_ok=True)
         logging.error("Document index error: %s", str(exc))
         raise HTTPException(status_code=502, detail="문서 검색 인덱스 갱신 중 오류가 발생했습니다.") from exc
 
@@ -288,7 +298,7 @@ async def remove_document(
     stored_name: str,
     access_code: str,
 ):
-    protect_request(request, access_code)
+    protect_request(request, access_code, minimum_role="editor")
     try:
         target_path = get_document_path(DOCUMENT_FOLDER, stored_name)
         retriever.remove_document(target_path.name)
@@ -315,7 +325,7 @@ async def clear_documents(
     request: Request,
     access_code: str,
 ):
-    protect_request(request, access_code)
+    protect_request(request, access_code, minimum_role="admin")
     try:
         retriever.clear_documents()
         deleted = clear_document_library(DOCUMENT_FOLDER)
@@ -403,13 +413,13 @@ async def chat_policy(
     question: str = Form(...),
     access_code: str = Form(""),
 ):
-    protect_request(request, access_code)
+    user = protect_request(request, access_code)
     question = question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="질문을 입력해주세요.")
 
     try:
-        related_rules, matches = retriever.get_relevant_rules(question, top_k=4)
+        related_rules, matches = retriever.get_relevant_rules(question, top_k=4, user=user)
         answer = generate_policy_answer(OPENAI_API_KEY, OPENAI_MODEL, question, related_rules)
         return {
             "answer": answer,
@@ -428,7 +438,7 @@ async def process_audio(
     stt_mode: str = Form("local"),
     access_code: str = Form(""),
 ):
-    protect_request(request, access_code)
+    user = protect_request(request, access_code)
     if stt_mode not in {"local", "openai"}:
         raise HTTPException(status_code=400, detail="지원하지 않는 STT 모드입니다.")
 
@@ -443,7 +453,7 @@ async def process_audio(
         if not full_script:
             return {"script": "인식된 음성 없음", "summary": "내용 없음", "retrieved_rule": "N/A"}
 
-        related_rules, matches = retriever.get_relevant_rules(full_script)
+        related_rules, matches = retriever.get_relevant_rules(full_script, user=user)
 
         logging.info("OpenAI minutes generation start")
         summary = generate_minutes(OPENAI_API_KEY, OPENAI_MODEL, full_script, related_rules)
