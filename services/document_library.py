@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency
     PdfReader = None
 
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+METADATA_SUFFIX = ".metadata.json"
 UUID_PREFIX_PATTERN = re.compile(r"^[0-9a-f-]{36}_(.+)$")
 INDEX_STATUS_FILENAME = ".index_status.json"
 INDEX_STATUS_INDEXED = "indexed"
@@ -23,6 +24,45 @@ INDEX_STATUS_FAILED = "failed"
 INDEX_STATUS_UNKNOWN = "unknown"
 
 
+def get_metadata_path(path):
+    return path.with_name(f"{path.name}{METADATA_SUFFIX}")
+
+
+def normalize_document_metadata(owner="system", visibility="public", allowed_roles=None):
+    allowed_roles = allowed_roles or ["viewer", "editor", "admin"]
+    return {
+        "owner": owner or "system",
+        "visibility": visibility or "public",
+        "allowed_roles": list(allowed_roles),
+    }
+
+
+def save_document_metadata(path, owner="system", visibility="public", allowed_roles=None):
+    metadata = normalize_document_metadata(owner, visibility, allowed_roles)
+    get_metadata_path(path).write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return metadata
+
+
+def read_document_metadata(path):
+    metadata_path = get_metadata_path(path)
+    if not metadata_path.exists():
+        return normalize_document_metadata()
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return normalize_document_metadata()
+    return normalize_document_metadata(
+        owner=metadata.get("owner", "system"),
+        visibility=metadata.get("visibility", "public"),
+        allowed_roles=metadata.get("allowed_roles") or ["viewer", "editor", "admin"],
+    )
+
+
+def split_text(text, max_chars=900):
+    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
 def get_index_status_path(document_folder):
     return document_folder / INDEX_STATUS_FILENAME
 
@@ -304,6 +344,7 @@ def list_stored_documents(document_folder):
 
         stat = path.stat()
         uploaded_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        metadata = read_document_metadata(path)
         index_status = index_statuses.get(path.name, {})
         documents.append(
             {
@@ -311,6 +352,9 @@ def list_stored_documents(document_folder):
                 "display_name": get_display_filename(path.name),
                 "size_bytes": stat.st_size,
                 "uploaded_at": uploaded_at.isoformat(),
+                "owner": metadata["owner"],
+                "visibility": metadata["visibility"],
+                "allowed_roles": metadata["allowed_roles"],
                 "index_status": index_status.get("status", INDEX_STATUS_UNKNOWN),
                 "index_error": index_status.get("error", ""),
                 "index_updated_at": index_status.get("updated_at", ""),
@@ -333,6 +377,7 @@ def get_document_path(document_folder, stored_name):
 def delete_document_file(document_folder, stored_name):
     target_path = get_document_path(document_folder, stored_name)
     target_path.unlink()
+    get_metadata_path(target_path).unlink(missing_ok=True)
     remove_document_index_status(document_folder, stored_name)
     return get_display_filename(target_path.name)
 
@@ -343,5 +388,6 @@ def clear_document_library(document_folder):
         path = document_folder / document["stored_name"]
         if path.exists():
             path.unlink()
+            get_metadata_path(path).unlink(missing_ok=True)
             deleted.append(document["display_name"])
     return deleted

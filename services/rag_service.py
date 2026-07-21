@@ -12,6 +12,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     SentenceTransformer = None
 
+from services.auth import build_document_where_filter, normalize_allowed_roles
 from services.document_library import (
     get_display_filename,
     list_stored_documents,
@@ -56,8 +57,16 @@ class DocumentRetriever:
     def invalidate(self):
         self._bootstrapped = False
 
-    def build_records_for_document(self, path, text=None):
+    def build_records_for_document(
+        self,
+        path,
+        text=None,
+        owner="system",
+        visibility="public",
+        allowed_roles=None,
+    ):
         text = text if text is not None else read_document_text(path)
+        allowed_roles = normalize_allowed_roles(allowed_roles)
         chunks = split_text(text)
         if not chunks:
             return []
@@ -79,15 +88,28 @@ class DocumentRetriever:
                         "char_start": chunk.char_start,
                         "char_end": chunk.char_end,
                         "source_kind": "document",
+                        "owner": owner,
+                        "visibility": visibility,
+                        "allowed_roles": ",".join(allowed_roles),
+                        "allowed_role_viewer": "viewer" in allowed_roles,
+                        "allowed_role_editor": "editor" in allowed_roles,
+                        "allowed_role_admin": "admin" in allowed_roles,
                     },
                 }
             )
         return records
 
-    def index_documents(self, paths):
+    def index_documents(self, paths, owner="system", visibility="public", allowed_roles=None):
         all_records = []
         for path in paths:
-            all_records.extend(self.build_records_for_document(path))
+            all_records.extend(
+                self.build_records_for_document(
+                    path,
+                    owner=owner,
+                    visibility=visibility,
+                    allowed_roles=allowed_roles,
+                )
+            )
 
         self.chroma_store.upsert_records(all_records)
         self._bootstrapped = True
@@ -111,7 +133,15 @@ class DocumentRetriever:
             for document in list_stored_documents(self.document_folder):
                 path = self.document_folder / document["stored_name"]
                 try:
-                    records.extend(self.build_records_for_document(path))
+                    roles = document.get("allowed_roles") or ["viewer", "editor", "admin"]
+                    records.extend(
+                        self.build_records_for_document(
+                            path,
+                            owner=document.get("owner", "system"),
+                            visibility=document.get("visibility", "public"),
+                            allowed_roles=roles,
+                        )
+                    )
                 except Exception as exc:
                     logging.warning("Document bootstrap failed: %s (%s)", path.name, exc)
 
@@ -129,6 +159,12 @@ class DocumentRetriever:
                 logging.warning("Document chunk count failed: %s (%s)", path.name, exc)
         return chunk_count
 
+    def get_relevant_rules(self, query, threshold=0.35, top_k=3, user=None):
+        self.bootstrap_documents()
+
+        query_embedding = self.get_embedder().encode([query], normalize_embeddings=True)[0]
+        default_matches = self.get_default_rule_matches(query_embedding, query)
+        document_matches = self.get_document_matches(query_embedding, user=user)
     def get_relevant_rules(self, query, threshold=0.35, top_k=3):
         query_embedding = self.get_embedder().encode([query], normalize_embeddings=True)[0]
         default_matches = self.get_default_rule_matches(query_embedding, query)
@@ -184,8 +220,9 @@ class DocumentRetriever:
             )
         return matches
 
-    def get_document_matches(self, query_embedding, limit=8):
-        response = self.chroma_store.query(query_embedding.tolist(), n_results=limit)
+    def get_document_matches(self, query_embedding, limit=8, user=None):
+        where = build_document_where_filter(user) if user else None
+        response = self.chroma_store.query(query_embedding.tolist(), n_results=limit, where=where)
         ids = response.get("ids") or []
         documents = response.get("documents") or []
         metadatas = response.get("metadatas") or []
