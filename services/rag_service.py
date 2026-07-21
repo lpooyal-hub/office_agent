@@ -2,7 +2,10 @@ import logging
 import re
 from threading import RLock
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - optional dependency for lightweight tests
+    np = None
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -59,18 +62,22 @@ class DocumentRetriever:
         if not chunks:
             return []
 
-        embeddings = self.get_embedder().encode(chunks, normalize_embeddings=True)
+        chunk_texts = [chunk.text for chunk in chunks]
+        embeddings = self.get_embedder().encode(chunk_texts, normalize_embeddings=True)
         records = []
         for index, chunk in enumerate(chunks):
             records.append(
                 {
-                    "id": f"{path.name}::chunk::{index}",
+                    "id": f"{path.name}::chunk::{chunk.chunk_index}",
                     "embedding": embeddings[index].tolist(),
-                    "document": chunk,
+                    "document": chunk.text,
                     "metadata": {
                         "stored_name": path.name,
                         "display_name": get_display_filename(path.name),
-                        "chunk_index": index,
+                        "section_title": chunk.section_title,
+                        "chunk_index": chunk.chunk_index,
+                        "char_start": chunk.char_start,
+                        "char_end": chunk.char_end,
                         "source_kind": "document",
                     },
                 }
@@ -138,33 +145,28 @@ class DocumentRetriever:
         if not combined_matches:
             return "관련된 내규를 찾을 수 없습니다.", []
 
-        lexical_scores = get_lexical_scores(query, [item["chunk"] for item in combined_matches])
-        for index, lexical_score in enumerate(lexical_scores):
-            combined_matches[index]["rank_score"] = combined_matches[index]["score"] + float(lexical_score)
-
-        ranked_matches = sorted(
-            combined_matches,
-            key=lambda item: item["rank_score"],
-            reverse=True,
-        )
+        ranked_matches = rank_matches(query, combined_matches)
 
         selected = []
         for match in ranked_matches:
-            if match["score"] >= threshold or not selected:
-                selected.append((match["chunk"], match["score"]))
+            if match["semantic_score"] >= threshold or not selected:
+                selected.append(match)
             if len(selected) >= top_k:
                 break
 
         rendered = "\n\n".join(
-            f"- {document}\n  유사도: {score:.2f}" for document, score in selected
+            f"- {match['chunk']}\n  유사도: {match['semantic_score']:.2f} / "
+            f"키워드: {match['lexical_score']:.2f} / 순위점수: {match['rank_score']:.2f}"
+            for match in selected
         )
         return rendered, selected
 
     def get_default_rule_matches(self, query_embedding, query, limit=5):
         default_rule_embeddings = self.get_default_rule_embeddings()
-        similarities = np.dot(default_rule_embeddings, query_embedding)
+        similarities = dot_similarities(default_rule_embeddings, query_embedding)
         lexical_scores = get_lexical_scores(query, self._default_rule_chunks)
-        ranked_indexes = np.argsort(similarities + lexical_scores)[::-1][:limit]
+        ranking_scores = [similarities[index] + lexical_scores[index] for index in range(len(similarities))]
+        ranked_indexes = sorted(range(len(ranking_scores)), key=lambda index: ranking_scores[index], reverse=True)[:limit]
 
         matches = []
         for index in ranked_indexes:
@@ -172,8 +174,12 @@ class DocumentRetriever:
             matches.append(
                 {
                     "chunk": chunk,
+                    "semantic_score": float(similarities[index]),
                     "score": float(similarities[index]),
+                    "lexical_score": 0.0,
                     "rank_score": float(similarities[index]),
+                    "source_kind": "default_rule",
+                    "chunk_index": int(index),
                 }
             )
         return matches
@@ -195,15 +201,69 @@ class DocumentRetriever:
             distance = distances[0][index] if distances and distances[0] else None
             score = convert_distance_to_score(distance)
             display_name = metadata.get("display_name") or metadata.get("stored_name") or "업로드 문서"
-            rendered_chunk = f"[{display_name}]\n{document_text}"
+            location = format_source_location(metadata)
+            rendered_chunk = f"[{display_name}]"
+            if location:
+                rendered_chunk = f"{rendered_chunk} {location}"
+            rendered_chunk = f"{rendered_chunk}\n{document_text}"
             matches.append(
                 {
                     "chunk": rendered_chunk,
+                    "semantic_score": score,
                     "score": score,
+                    "lexical_score": 0.0,
                     "rank_score": score,
+                    "source_kind": metadata.get("source_kind") or "document",
+                    "chunk_index": metadata.get("chunk_index"),
                 }
             )
         return matches
+
+
+def format_source_location(metadata):
+    section_title = metadata.get("section_title") or ""
+    chunk_index = metadata.get("chunk_index")
+    char_start = metadata.get("char_start")
+    char_end = metadata.get("char_end")
+
+    details = []
+    if section_title:
+        details.append(section_title)
+    if chunk_index is not None:
+        details.append(f"chunk {int(chunk_index) + 1}")
+    if char_start is not None and char_end is not None:
+        details.append(f"chars {int(char_start)}-{int(char_end)}")
+
+    return f"({' · '.join(details)})" if details else ""
+def dot_similarities(embeddings, query_embedding):
+    if np is not None:
+        return np.dot(embeddings, query_embedding)
+    return [
+        sum(float(value) * float(query_embedding[index]) for index, value in enumerate(embedding))
+        for embedding in embeddings
+    ]
+
+
+def rank_matches(query, semantic_matches):
+    """Return matches sorted by combined semantic and lexical relevance score."""
+    if not semantic_matches:
+        return []
+
+    ranked = []
+    lexical_scores = get_lexical_scores(query, [item.get("chunk", "") for item in semantic_matches])
+    for index, match in enumerate(semantic_matches):
+        semantic_score = float(match.get("semantic_score", match.get("score", 0.0)) or 0.0)
+        lexical_score = float(lexical_scores[index])
+        enriched = dict(match)
+        enriched["semantic_score"] = semantic_score
+        enriched["score"] = semantic_score
+        enriched["lexical_score"] = lexical_score
+        enriched["rank_score"] = semantic_score + lexical_score
+        enriched.setdefault("source_kind", "default_rule")
+        enriched.setdefault("chunk_index", None)
+        ranked.append(enriched)
+
+    return sorted(ranked, key=lambda item: item["rank_score"], reverse=True)
 
 
 def convert_distance_to_score(distance):
@@ -212,17 +272,43 @@ def convert_distance_to_score(distance):
     return max(0.0, 1.0 - float(distance))
 
 
-def parse_rule_match(chunk_text, score):
+def parse_rule_match(match, score=None):
+    if isinstance(match, dict):
+        chunk_text = match.get("chunk", "")
+        semantic_score = float(match.get("semantic_score", match.get("score", score or 0.0)) or 0.0)
+        lexical_score = float(match.get("lexical_score", 0.0) or 0.0)
+        rank_score = float(match.get("rank_score", semantic_score + lexical_score) or 0.0)
+        source_kind = match.get("source_kind") or "default_rule"
+        chunk_index = match.get("chunk_index")
+    else:
+        chunk_text = match
+        semantic_score = float(score or 0.0)
+        lexical_score = 0.0
+        rank_score = semantic_score
+        source_kind = "default_rule"
+        chunk_index = None
+
     lines = chunk_text.splitlines()
     source = "기본 내규"
     excerpt = chunk_text
-    if lines and lines[0].startswith("[") and lines[0].endswith("]"):
-        source = lines[0][1:-1]
+    if lines and lines[0].startswith("["):
+        header_match = re.match(r"^\[([^\]]+)\]\s*(?:\((.*)\))?$", lines[0])
+        if not header_match:
+            header_match = re.match(r"^\[([^\]]+)\]", lines[0])
+        source = header_match.group(1) if header_match else lines[0][1:-1]
+        location = header_match.group(2) if header_match and header_match.lastindex and header_match.lastindex >= 2 else ""
         excerpt = "\n".join(lines[1:]).strip() or "(본문 없음)"
 
     return {
         "source": source,
         "score": round(score, 2),
+        "location": locals().get("location", ""),
+        "score": round(semantic_score, 2),
+        "semantic_score": round(semantic_score, 4),
+        "lexical_score": round(lexical_score, 4),
+        "rank_score": round(rank_score, 4),
+        "source_kind": source_kind,
+        "chunk_index": chunk_index,
         "excerpt": excerpt[:320].strip(),
     }
 
@@ -230,14 +316,14 @@ def parse_rule_match(chunk_text, score):
 def get_lexical_scores(query, chunks):
     keywords = expand_query_terms(query)
     if not keywords:
-        return np.zeros(len(chunks))
+        return np.zeros(len(chunks)) if np is not None else [0.0] * len(chunks)
 
     scores = []
     for chunk in chunks:
         lowered = chunk.lower()
         matched = sum(1 for keyword in keywords if keyword in lowered)
         scores.append(min(matched * 0.35, 1.05))
-    return np.array(scores)
+    return np.array(scores) if np is not None else scores
 
 
 def expand_query_terms(query):

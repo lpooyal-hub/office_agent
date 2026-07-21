@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import os
 import secrets
 import time
@@ -8,7 +9,7 @@ from threading import RLock
 from typing import List
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +23,7 @@ from services.ai_client import (
     build_summary_prompt,
     generate_minutes,
     generate_policy_answer,
+    build_summary_prompt,
     summarize_document_text,
     transcribe_with_openai,
 )
@@ -35,12 +37,13 @@ from services.document_library import (
     get_display_filename,
     get_document_path,
     get_safe_upload_filename,
-    list_stored_documents,
     read_document_text,
     save_upload_file,
     set_document_index_status,
     summarize_index_statuses,
 )
+from services.document_repository import DocumentRepository
+from services.jobs import JobStore
 from services.rag_service import DocumentRetriever, parse_rule_match
 
 load_dotenv()
@@ -94,13 +97,146 @@ chroma_store = ChromaStore(
     timeout_seconds=CHROMA_TIMEOUT_SECONDS,
     token=CHROMA_TOKEN,
 )
+document_repository = DocumentRepository(DOCUMENT_FOLDER / "metadata.jsonl")
 retriever = DocumentRetriever(
     DOCUMENT_FOLDER,
     EMBEDDING_MODEL,
     DEFAULT_COMPANY_RULES,
     chroma_store,
 )
+job_store = JobStore()
 
+
+
+def fail_job(job_id, step, message, exc):
+    logging.error("%s: %s", message, str(exc))
+    job_store.mark_failed(job_id, message, step=step)
+
+
+def run_document_upload_job(job_id, saved_paths):
+    job_store.mark_running(job_id, step="문서 파싱")
+    try:
+        for path in saved_paths:
+            text = read_document_text(path)
+            if not text.strip():
+                raise ValueError(
+                    f"문서에서 읽을 수 있는 내용이 없습니다: {get_display_filename(path.name)}"
+                )
+    except Exception as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        fail_job(job_id, "문서 파싱", "문서 파싱 실패", exc)
+        return
+
+    job_store.mark_running(job_id, step="임베딩 생성")
+    try:
+        retriever.index_documents(saved_paths)
+    except Exception as exc:
+        for path in saved_paths:
+            try:
+                retriever.remove_document(path.name)
+            except Exception:
+                logging.warning("Document index rollback skipped: %s", path.name)
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        fail_job(job_id, "임베딩 생성", "임베딩 생성 실패", exc)
+        return
+
+    retriever.invalidate()
+    documents = list_stored_documents(DOCUMENT_FOLDER)
+    job_store.mark_succeeded(job_id, {
+        "message": "문서 업로드와 지식 베이스 갱신이 완료되었습니다.",
+        "files": [
+            {"stored_name": path.name, "display_name": get_display_filename(path.name)}
+            for path in saved_paths
+        ],
+        "document_chunks": retriever.get_rule_chunk_count(),
+        "documents": documents,
+        "count": len(documents),
+    })
+
+
+def run_summary_job(job_id, saved_paths):
+    documents = []
+    job_store.mark_running(job_id, step="문서 파싱")
+    try:
+        for temp_path in saved_paths:
+            filename = get_display_filename(temp_path.name)
+            text = read_document_text(temp_path)
+            if not text.strip():
+                raise ValueError(f"문서에서 읽을 수 있는 내용이 없습니다: {filename}")
+            documents.append((filename, text))
+    except Exception as exc:
+        fail_job(job_id, "문서 파싱", "문서 파싱 실패", exc)
+        return
+    finally:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+
+    job_store.mark_running(job_id, step="LLM 호출")
+    try:
+        summaries = [
+            {
+                "filename": filename,
+                "summary": summarize_document_text(OPENAI_API_KEY, OPENAI_MODEL, filename, text),
+            }
+            for filename, text in documents
+        ]
+        combined_summary = "\n\n".join(
+            f"### {item['filename']}\n{item['summary']}" for item in summaries
+        )
+    except Exception as exc:
+        fail_job(job_id, "LLM 호출", "LLM 호출 실패", exc)
+        return
+
+    job_store.mark_succeeded(job_id, {
+        "message": "문서 요약이 완료되었습니다.",
+        "summaries": summaries,
+        "combined_summary": combined_summary,
+    })
+
+
+def run_audio_process_job(job_id, file_path, stt_mode):
+    job_store.mark_running(job_id, step="문서 파싱")
+    try:
+        full_script = transcribe_audio(file_path, stt_mode)
+    except Exception as exc:
+        fail_job(job_id, "문서 파싱", "문서 파싱 실패", exc)
+        return
+    finally:
+        file_path.unlink(missing_ok=True)
+
+    if not full_script:
+        job_store.mark_succeeded(job_id, {
+            "script": "인식된 음성 없음",
+            "summary": "내용 없음",
+            "retrieved_rule": "N/A",
+            "stt_mode": stt_mode,
+            "sources": [],
+        })
+        return
+
+    job_store.mark_running(job_id, step="임베딩 생성")
+    try:
+        related_rules, matches = retriever.get_relevant_rules(full_script)
+    except Exception as exc:
+        fail_job(job_id, "임베딩 생성", "임베딩 생성 실패", exc)
+        return
+
+    job_store.mark_running(job_id, step="LLM 호출")
+    try:
+        summary = generate_minutes(OPENAI_API_KEY, OPENAI_MODEL, full_script, related_rules)
+    except Exception as exc:
+        fail_job(job_id, "LLM 호출", "LLM 호출 실패", exc)
+        return
+
+    job_store.mark_succeeded(job_id, {
+        "script": full_script,
+        "summary": summary,
+        "retrieved_rule": related_rules,
+        "stt_mode": stt_mode,
+        "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+    })
 
 def get_whisper_model():
     global _whisper_model
@@ -186,7 +322,7 @@ async def index(request: Request):
         "index.html",
         {
             "request": request,
-            "document_count": len(list_stored_documents(DOCUMENT_FOLDER)),
+            "document_count": len(list_repository_documents()),
             "embedding_model": EMBEDDING_MODEL,
             "llm_model": OPENAI_MODEL,
             "openai_stt_model": OPENAI_STT_MODEL,
@@ -214,9 +350,43 @@ async def health():
     }
 
 
+def get_existing_document_names():
+    return {
+        path.name
+        for path in DOCUMENT_FOLDER.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_DOCUMENT_EXTENSIONS
+    }
+
+
+def list_repository_documents():
+    existing_names = get_existing_document_names()
+    documents = document_repository.list_documents(existing_names=existing_names)
+    known_names = {document["stored_name"] for document in documents}
+    for stored_name in existing_names - known_names:
+        path = DOCUMENT_FOLDER / stored_name
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        document_repository.create_document(
+            stored_name=path.name,
+            display_name=get_display_filename(path.name),
+            content_type=content_type,
+            size_bytes=path.stat().st_size,
+            tags=[],
+            owner="",
+            description="",
+        )
+        document_repository.update_index_status(path.name, "indexed")
+    return document_repository.list_documents(existing_names=existing_names)
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="작업을 찾지 못했습니다.")
+    return job.to_dict()
+
+
 @app.get("/documents")
 async def get_documents():
-    documents = list_stored_documents(DOCUMENT_FOLDER)
+    documents = list_repository_documents()
     return {
         "documents": documents,
         "count": len(documents),
@@ -226,15 +396,21 @@ async def get_documents():
 @app.post("/documents")
 async def upload_documents(
     request: Request,
+    background_tasks: BackgroundTasks,
     access_code: str = Form(""),
     files: List[UploadFile] = File(...),
+    tags: str = Form(""),
+    owner: str = Form(""),
+    description: str = Form(""),
 ):
     protect_request(request, access_code)
     validate_document_uploads(files)
 
     saved_paths = []
+    upload_tags = document_repository.parse_tags(tags)
     try:
         for file in files:
+            content_type = file.content_type or "application/octet-stream"
             saved_path = save_upload_file(
                 file,
                 DOCUMENT_FOLDER,
@@ -248,17 +424,37 @@ async def upload_documents(
                 raise_upload_error(
                     f"문서에서 읽을 수 있는 내용이 없습니다: {get_display_filename(saved_path.name)}"
                 )
+
+            document_repository.create_document(
+                stored_name=saved_path.name,
+                display_name=get_display_filename(saved_path.name),
+                content_type=content_type,
+                size_bytes=saved_path.stat().st_size,
+                tags=upload_tags,
+                owner=owner.strip(),
+                description=description.strip(),
+            saved_paths.append(
+                save_upload_file(
+                    file,
+                    DOCUMENT_FOLDER,
+                    MAX_DOCUMENT_UPLOAD_MB,
+                    preserve_name=True,
+                )
+            )
     except ValueError as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
         raise_upload_error(str(exc), status_code=413)
     except HTTPException:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
         raise
     except Exception as exc:
         for path in saved_paths:
             path.unlink(missing_ok=True)
+            document_repository.delete_document(path.name)
         logging.error("Document upload error: %s", str(exc))
         raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
 
@@ -274,9 +470,31 @@ async def upload_documents(
         for path in saved_paths:
             set_document_index_status(DOCUMENT_FOLDER, path.name, INDEX_STATUS_FAILED, index_error)
         logging.error("Document index error: %s", index_error)
+            try:
+                retriever.remove_document(path.name)
+            except Exception:
+                logging.warning("Document index rollback skipped: %s", path.name)
+            document_repository.update_index_status(path.name, "failed")
+        retriever.invalidate()
+        documents = list_repository_documents()
+        uploaded_names = {path.name for path in saved_paths}
+        logging.error("Document index error: %s", str(exc))
+        return {
+            "message": "문서는 저장했지만 검색 인덱스 갱신에 실패했습니다.",
+            "files": [
+                document for document in documents if document["stored_name"] in uploaded_names
+            ],
+            "document_chunks": retriever.get_rule_chunk_count(),
+            "documents": documents,
+            "count": len(documents),
+        }
+
+    for path in saved_paths:
+        document_repository.update_index_status(path.name, "indexed")
 
     retriever.invalidate()
-    documents = list_stored_documents(DOCUMENT_FOLDER)
+    documents = list_repository_documents()
+    uploaded_names = {path.name for path in saved_paths}
     return {
         "message": (
             "문서 업로드는 완료되었지만 검색 인덱스 갱신에 실패했습니다. 재색인을 시도해주세요."
@@ -286,16 +504,21 @@ async def upload_documents(
         "index_failed": index_failed,
         "index_error": index_error,
         "files": [
-            {
-                "stored_name": path.name,
-                "display_name": get_display_filename(path.name),
-            }
-            for path in saved_paths
+            document for document in documents if document["stored_name"] in uploaded_names
         ],
         "document_chunks": retriever.get_rule_chunk_count(),
         "documents": documents,
         "count": len(documents),
     }
+    except Exception as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        logging.error("Document upload save error: %s", str(exc))
+        raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.") from exc
+
+    job = job_store.create()
+    background_tasks.add_task(run_document_upload_job, job.job_id, saved_paths)
+    return {"job_id": job.job_id, "status": job.status.value}
 
 
 @app.post("/documents/{stored_name}/reindex")
@@ -338,7 +561,9 @@ async def remove_document(
     try:
         target_path = get_document_path(DOCUMENT_FOLDER, stored_name)
         retriever.remove_document(target_path.name)
-        display_name = delete_document_file(DOCUMENT_FOLDER, stored_name)
+        display_name = get_display_filename(target_path.name)
+        target_path.unlink()
+        document_repository.delete_document(stored_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -348,7 +573,7 @@ async def remove_document(
         raise HTTPException(status_code=502, detail="문서 인덱스 삭제 중 오류가 발생했습니다.") from exc
 
     retriever.invalidate()
-    documents = list_stored_documents(DOCUMENT_FOLDER)
+    documents = list_repository_documents()
     return {
         "message": f"{display_name} 문서를 삭제했습니다.",
         "documents": documents,
@@ -363,8 +588,15 @@ async def clear_documents(
 ):
     protect_request(request, access_code)
     try:
+        documents = list_repository_documents()
         retriever.clear_documents()
-        deleted = clear_document_library(DOCUMENT_FOLDER)
+        deleted = []
+        for document in documents:
+            path = DOCUMENT_FOLDER / document["stored_name"]
+            if path.exists():
+                path.unlink()
+                deleted.append(document["display_name"])
+            document_repository.delete_document(document["stored_name"])
     except Exception as exc:
         logging.error("Document clear error: %s", str(exc))
         raise HTTPException(status_code=502, detail="문서 인덱스 초기화 중 오류가 발생했습니다.") from exc
@@ -381,6 +613,7 @@ async def clear_documents(
 @app.post("/summarize")
 async def summarize_documents(
     request: Request,
+    background_tasks: BackgroundTasks,
     access_code: str = Form(""),
     files: List[UploadFile] = File(...),
 ):
@@ -394,53 +627,21 @@ async def summarize_documents(
 
     saved_paths = []
     try:
-        documents = []
         for file in files:
-            original_filename = get_safe_upload_filename(file.filename)
-            suffix = Path(original_filename).suffix.lower()
-            if suffix not in SUPPORTED_DOCUMENT_EXTENSIONS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"지원하지 않는 문서 형식입니다: {original_filename}",
-                )
-
-            temp_path = save_upload_file(file, UPLOAD_FOLDER, MAX_DOCUMENT_UPLOAD_MB)
-            saved_paths.append(temp_path)
-            text = read_document_text(temp_path)
-            if not text.strip():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"문서에서 읽을 수 있는 내용이 없습니다: {original_filename}",
-                )
-            documents.append((original_filename, text))
-
-        summaries = [
-            {
-                "filename": filename,
-                "summary": summarize_document_text(OPENAI_API_KEY, OPENAI_MODEL, filename, text),
-            }
-            for filename, text in documents
-        ]
-
-        combined_summary = "\n\n".join(
-            f"### {item['filename']}\n{item['summary']}" for item in summaries
-        )
-        return {
-            "message": "문서 요약이 완료되었습니다.",
-            "summaries": summaries,
-            "combined_summary": combined_summary,
-        }
+            saved_paths.append(save_upload_file(file, UPLOAD_FOLDER, MAX_DOCUMENT_UPLOAD_MB))
     except ValueError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logging.error("Document summary error: %s", str(exc))
-        raise HTTPException(status_code=502, detail="문서 요약 중 오류가 발생했습니다.") from exc
-    finally:
         for path in saved_paths:
-            if path.exists():
-                path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except Exception as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        logging.error("Document summary upload error: %s", str(exc))
+        raise HTTPException(status_code=500, detail="문서 요약 요청 저장 중 오류가 발생했습니다.") from exc
+
+    job = job_store.create()
+    background_tasks.add_task(run_summary_job, job.job_id, saved_paths)
+    return {"job_id": job.job_id, "status": job.status.value}
 
 
 @app.post("/chat")
@@ -460,7 +661,7 @@ async def chat_policy(
         return {
             "answer": answer,
             "retrieved_rule": related_rules,
-            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+            "sources": [parse_rule_match(match) for match in matches],
         }
     except Exception as exc:
         logging.error("Chat error: %s", str(exc))
@@ -470,6 +671,7 @@ async def chat_policy(
 @app.post("/process")
 async def process_audio(
     request: Request,
+    background_tasks: BackgroundTasks,
     audio_file: UploadFile = File(...),
     stt_mode: str = Form("local"),
     access_code: str = Form(""),
@@ -499,7 +701,7 @@ async def process_audio(
             "summary": summary,
             "retrieved_rule": related_rules,
             "stt_mode": stt_mode,
-            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+            "sources": [parse_rule_match(match) for match in matches],
         }
 
     except Exception as exc:
@@ -509,6 +711,9 @@ async def process_audio(
     finally:
         if file_path.exists():
             file_path.unlink()
+    job = job_store.create()
+    background_tasks.add_task(run_audio_process_job, job.job_id, file_path, stt_mode)
+    return {"job_id": job.job_id, "status": job.status.value}
 
 
 if __name__ == "__main__":

@@ -23,6 +23,34 @@ function setAlert(message = "") {
     alertBox.style.display = "block";
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function pollJob(jobId, statusMessage) {
+    if (!jobId) {
+        throw new Error("작업 ID를 받지 못했습니다.");
+    }
+
+    while (true) {
+        const response = await fetch(`/jobs/${encodeURIComponent(jobId)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "작업 상태 조회 실패");
+
+        if (data.status === "succeeded") {
+            return data.result || {};
+        }
+        if (data.status === "failed") {
+            throw new Error(data.error || `${data.step || "작업"} 실패`);
+        }
+
+        if (statusMessage) {
+            setAlert(`${statusMessage} (${data.step || data.status})`);
+        }
+        await sleep(1500);
+    }
+}
+
 function escapeHtml(value) {
     return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -78,6 +106,15 @@ function downloadEncodedTextFile(filename, encodedText) {
     downloadTextFile(filename, decodeURIComponent(encodedText));
 }
 
+function getIndexStatusLabel(status) {
+    const labels = {
+        pending: "색인 대기",
+        indexed: "색인 완료",
+        failed: "색인 실패",
+    };
+    return labels[status] || "상태 미확인";
+}
+
 function renderDocumentLibrary(documents) {
     const list = document.getElementById("docLibraryList");
     const empty = document.getElementById("docLibraryEmpty");
@@ -111,8 +148,22 @@ function renderDocumentLibrary(documents) {
                 <div class="inline-actions">
                     ${retryButton}
                     <button class="btn secondary" onclick="deleteDocument('${encodedStoredName}')">삭제</button>
+        const tags = (doc.tags || []).map((tag) => `<span class="doc-tag">${escapeHtml(tag)}</span>`).join("");
+        const owner = doc.owner ? ` · 소유자: ${escapeHtml(doc.owner)}` : "";
+        const indexedAt = doc.indexed_at ? ` · 색인: ${formatDate(doc.indexed_at)}` : "";
+        return `
+        <div class="doc-item">
+            <div class="doc-header">
+                <div>
+                    <div class="doc-title-row">
+                        <div class="doc-name">${escapeHtml(doc.display_name)}</div>
+                        <span class="doc-status ${escapeHtml(doc.index_status || "unknown")}">${getIndexStatusLabel(doc.index_status)}</span>
+                    </div>
+                    <div class="doc-sub">${formatBytes(doc.size_bytes)} · ${escapeHtml(doc.content_type || "-")} · 업로드: ${formatDate(doc.uploaded_at)}${indexedAt}${owner}</div>
                 </div>
             </div>
+            ${doc.description ? `<div class="doc-description">${escapeHtml(doc.description)}</div>` : ""}
+            ${tags ? `<div class="doc-tags">${tags}</div>` : ""}
         </div>
     `;
     }).join("");
@@ -141,6 +192,9 @@ async function uploadDocuments() {
 
     const formData = new FormData();
     formData.append("access_code", accessCode);
+    formData.append("tags", document.getElementById("docTags").value.trim());
+    formData.append("owner", document.getElementById("docOwner").value.trim());
+    formData.append("description", document.getElementById("docDescription").value.trim());
     Array.from(fileInput.files).forEach((file) => formData.append("files", file));
 
     setAlert("");
@@ -156,11 +210,17 @@ async function uploadDocuments() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "문서 업로드 서버 응답 오류");
 
-        const names = (data.files || []).map((file) => file.display_name).join(", ");
-        resultBox.innerText = `업로드 완료\n${names}\n현재 문서 수: ${data.count}개`;
+        const result = await pollJob(data.job_id, "문서 업로드 처리 중");
+        const names = (result.files || []).map((file) => file.display_name).join(", ");
+        resultBox.innerText = `업로드 완료\n${names}\n현재 문서 수: ${result.count}개`;
         resultBox.style.display = "block";
         fileInput.value = "";
+        document.getElementById("docTags").value = "";
+        document.getElementById("docOwner").value = "";
+        document.getElementById("docDescription").value = "";
         renderDocumentLibrary(data.documents || []);
+        renderDocumentLibrary(result.documents || []);
+        setAlert("");
     } catch (error) {
         console.error(error);
         setAlert(`문서 업로드 중 오류가 발생했습니다.\n${error.message}`);
@@ -267,6 +327,9 @@ async function summarizeDocuments() {
 
     const formData = new FormData();
     formData.append("access_code", accessCode);
+    formData.append("tags", document.getElementById("docTags").value.trim());
+    formData.append("owner", document.getElementById("docOwner").value.trim());
+    formData.append("description", document.getElementById("docDescription").value.trim());
     Array.from(fileInput.files).forEach((file) => formData.append("files", file));
 
     setAlert("");
@@ -281,8 +344,10 @@ async function summarizeDocuments() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "문서 요약 서버 응답 오류");
-        renderSummaryResult(data);
+        const result = await pollJob(data.job_id, "문서 요약 처리 중");
+        renderSummaryResult(result);
         fileInput.value = "";
+        setAlert("");
     } catch (error) {
         console.error(error);
         setAlert(`문서 요약 중 오류가 발생했습니다.\n${error.message}`);
@@ -290,6 +355,19 @@ async function summarizeDocuments() {
         setLoading("summaryLoading", false);
         btn.disabled = false;
     }
+}
+
+function formatScore(value) {
+    const number = Number(value || 0);
+    return number.toFixed(2);
+}
+
+function describeSourceReason(source) {
+    const sourceKind = source.source_kind === "document" ? "업로드 문서" : "기본 내규";
+    const chunkLabel = source.chunk_index === null || source.chunk_index === undefined
+        ? "청크 정보 없음"
+        : `청크 #${source.chunk_index}`;
+    return `${sourceKind} · ${chunkLabel} · 의미 유사도와 질문 키워드 일치도를 합산해 선택`;
 }
 
 function renderSources(elementId, sources) {
@@ -303,6 +381,13 @@ function renderSources(elementId, sources) {
         <div class="source-card">
             <div class="source-title">${escapeHtml(source.source)}</div>
             <div class="source-meta">유사도 ${source.score.toFixed(2)}</div>
+            ${source.location ? `<div class="source-location">${escapeHtml(source.location)}</div>` : ""}
+            <div class="source-meta">
+                <span>의미 ${formatScore(source.semantic_score ?? source.score)}</span>
+                <span>키워드 ${formatScore(source.lexical_score)}</span>
+                <span>순위 ${formatScore(source.rank_score)}</span>
+            </div>
+            <div class="source-reason">왜 선택됐나요? ${escapeHtml(describeSourceReason(source))}</div>
             <div class="source-excerpt">${escapeHtml(source.excerpt)}</div>
         </div>
     `).join("");
@@ -376,11 +461,13 @@ async function startProcess() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "서버 응답 오류");
 
-        document.getElementById("retrievedRule").innerText = data.retrieved_rule || "관련 내규를 찾지 못했습니다.";
-        document.getElementById("summary").innerText = data.summary || "요약 결과가 없습니다.";
-        document.getElementById("script").innerText = data.script || "인식된 스크립트가 없습니다.";
-        renderSources("audioSources", data.sources || []);
+        const result = await pollJob(data.job_id, "회의록 생성 처리 중");
+        document.getElementById("retrievedRule").innerText = result.retrieved_rule || "관련 내규를 찾지 못했습니다.";
+        document.getElementById("summary").innerText = result.summary || "요약 결과가 없습니다.";
+        document.getElementById("script").innerText = result.script || "인식된 스크립트가 없습니다.";
+        renderSources("audioSources", result.sources || []);
         resultArea.style.display = "block";
+        setAlert("");
     } catch (error) {
         console.error(error);
         setAlert(`처리 중 오류가 발생했습니다.\n${error.message}`);
