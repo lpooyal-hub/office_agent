@@ -364,6 +364,8 @@ textarea {
 }
 
 .doc-sub,
+.source-meta,
+.source-location {
 .source-meta {
     display: flex;
     flex-wrap: wrap;
@@ -395,6 +397,11 @@ textarea {
 }
 
 .source-title {
+    font-weight: 700;
+}
+
+.source-location {
+    color: #4f7167;
     font-weight: 700;
 }
 

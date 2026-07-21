@@ -338,6 +338,8 @@ function renderSources(elementId, sources) {
     container.innerHTML = sources.map((source) => `
         <div class="source-card">
             <div class="source-title">${escapeHtml(source.source)}</div>
+            <div class="source-meta">유사도 ${source.score.toFixed(2)}</div>
+            ${source.location ? `<div class="source-location">${escapeHtml(source.location)}</div>` : ""}
             <div class="source-meta">
                 <span>의미 ${formatScore(source.semantic_score ?? source.score)}</span>
                 <span>키워드 ${formatScore(source.lexical_score)}</span>
