@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - optional dependency
     whisper = None
 
 from services.ai_client import (
+    build_summary_prompt,
     generate_minutes,
     generate_policy_answer,
     summarize_document_text,
@@ -28,6 +29,8 @@ from services.chroma_store import ChromaStore
 from services.document_library import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     clear_document_library,
+    INDEX_STATUS_FAILED,
+    INDEX_STATUS_INDEXED,
     delete_document_file,
     get_display_filename,
     get_document_path,
@@ -35,6 +38,8 @@ from services.document_library import (
     list_stored_documents,
     read_document_text,
     save_upload_file,
+    set_document_index_status,
+    summarize_index_statuses,
 )
 from services.rag_service import DocumentRetriever, parse_rule_match
 
@@ -192,6 +197,8 @@ async def index(request: Request):
 
 @app.get("/health")
 async def health():
+    chroma_health = chroma_store.health_check()
+    document_index_status = summarize_index_statuses(DOCUMENT_FOLDER)
     return {
         "status": "ok",
         "embedding_model": EMBEDDING_MODEL,
@@ -201,6 +208,9 @@ async def health():
         "document_chunks": retriever.get_rule_chunk_count(),
         "vector_store": "chroma",
         "chroma_collection": CHROMA_COLLECTION,
+        "chroma_status": chroma_health["status"],
+        "chroma_error": chroma_health["error"],
+        "document_index_status": document_index_status,
     }
 
 
@@ -252,23 +262,29 @@ async def upload_documents(
         logging.error("Document upload error: %s", str(exc))
         raise HTTPException(status_code=500, detail="문서 업로드 중 오류가 발생했습니다.")
 
+    index_failed = False
+    index_error = ""
     try:
         retriever.index_documents(saved_paths)
+        for path in saved_paths:
+            set_document_index_status(DOCUMENT_FOLDER, path.name, INDEX_STATUS_INDEXED)
     except Exception as exc:
+        index_failed = True
+        index_error = str(exc)
         for path in saved_paths:
-            try:
-                retriever.remove_document(path.name)
-            except Exception:
-                logging.warning("Document index rollback skipped: %s", path.name)
-        for path in saved_paths:
-            path.unlink(missing_ok=True)
-        logging.error("Document index error: %s", str(exc))
-        raise HTTPException(status_code=502, detail="문서 검색 인덱스 갱신 중 오류가 발생했습니다.") from exc
+            set_document_index_status(DOCUMENT_FOLDER, path.name, INDEX_STATUS_FAILED, index_error)
+        logging.error("Document index error: %s", index_error)
 
     retriever.invalidate()
     documents = list_stored_documents(DOCUMENT_FOLDER)
     return {
-        "message": "문서 업로드와 지식 베이스 갱신이 완료되었습니다.",
+        "message": (
+            "문서 업로드는 완료되었지만 검색 인덱스 갱신에 실패했습니다. 재색인을 시도해주세요."
+            if index_failed
+            else "문서 업로드와 지식 베이스 갱신이 완료되었습니다."
+        ),
+        "index_failed": index_failed,
+        "index_error": index_error,
         "files": [
             {
                 "stored_name": path.name,
@@ -277,6 +293,36 @@ async def upload_documents(
             for path in saved_paths
         ],
         "document_chunks": retriever.get_rule_chunk_count(),
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
+@app.post("/documents/{stored_name}/reindex")
+async def reindex_document(
+    request: Request,
+    stored_name: str,
+    access_code: str = Form(""),
+):
+    protect_request(request, access_code)
+    try:
+        target_path = get_document_path(DOCUMENT_FOLDER, stored_name)
+        retriever.remove_document(target_path.name)
+        retriever.index_documents([target_path])
+        set_document_index_status(DOCUMENT_FOLDER, target_path.name, INDEX_STATUS_INDEXED)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        set_document_index_status(DOCUMENT_FOLDER, stored_name, INDEX_STATUS_FAILED, str(exc))
+        logging.error("Document reindex error: %s", str(exc))
+        raise HTTPException(status_code=502, detail="문서 재색인 중 오류가 발생했습니다.") from exc
+
+    retriever.invalidate()
+    documents = list_stored_documents(DOCUMENT_FOLDER)
+    return {
+        "message": f"{get_display_filename(target_path.name)} 문서를 재색인했습니다.",
         "documents": documents,
         "count": len(documents),
     }

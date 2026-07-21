@@ -314,6 +314,18 @@ textarea {
     font-size: 13px;
 }
 
+.doc-failed {
+    border-color: #f2b8b5;
+    background: #fff7f6;
+}
+
+.doc-error {
+    margin-top: 8px;
+    color: #b42318;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
 .source-card {
     background: var(--info-soft);
     border-color: var(--info-line);

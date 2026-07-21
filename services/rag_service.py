@@ -123,11 +123,16 @@ class DocumentRetriever:
         return chunk_count
 
     def get_relevant_rules(self, query, threshold=0.35, top_k=3):
-        self.bootstrap_documents()
-
         query_embedding = self.get_embedder().encode([query], normalize_embeddings=True)[0]
         default_matches = self.get_default_rule_matches(query_embedding, query)
-        document_matches = self.get_document_matches(query_embedding)
+
+        try:
+            self.bootstrap_documents()
+            document_matches = self.get_document_matches(query_embedding)
+        except Exception as exc:
+            logging.warning("ChromaDB document retrieval failed; using default rules only: %s", exc)
+            document_matches = []
+
         combined_matches = default_matches + document_matches
 
         if not combined_matches:

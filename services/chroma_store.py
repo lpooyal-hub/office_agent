@@ -73,6 +73,22 @@ class ChromaStore:
     def invalidate_collection_cache(self):
         self._collection_id = None
 
+    def health_check(self):
+        try:
+            collection_id = self.ensure_collection()
+            return {
+                "status": "ok",
+                "error": "",
+                "collection_id": collection_id,
+            }
+        except Exception as exc:
+            logging.warning("Chroma health check failed: %s", exc)
+            return {
+                "status": "error",
+                "error": str(exc),
+                "collection_id": None,
+            }
+
     def collection_records_path(self, action):
         collection_id = self.ensure_collection()
         return (
