@@ -192,6 +192,19 @@ python main.py
 ### Docker 실행
 
 Docker Compose는 `.env` 값을 컨테이너 환경변수로 전달합니다.
+### Test
+
+```bash
+python -m unittest tests/test_document_summary.py
+```
+
+또는 `pytest`를 사용하는 경우 다음 명령으로 실행할 수 있습니다.
+
+```bash
+pytest
+```
+
+### Docker
 
 ```bash
 docker compose up -d --build

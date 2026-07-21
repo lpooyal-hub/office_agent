@@ -79,6 +79,20 @@
                             <label for="docInput">문서 업로드</label>
                             <input type="file" id="docInput" accept=".pdf,.docx,.txt,.md" multiple>
                         </div>
+                        <div class="field-grid">
+                            <div class="field">
+                                <label for="docTags">태그</label>
+                                <input type="text" id="docTags" placeholder="예: 인사, 내규, 온보딩">
+                            </div>
+                            <div class="field">
+                                <label for="docOwner">소유자</label>
+                                <input type="text" id="docOwner" placeholder="예: People팀">
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="docDescription">설명</label>
+                            <textarea id="docDescription" placeholder="문서의 용도나 주요 내용을 적어주세요."></textarea>
+                        </div>
                         <div class="actions" style="margin-top: 12px;">
                             <button class="btn" id="docBtn" onclick="uploadDocuments()">문서 업로드</button>
                         </div>
