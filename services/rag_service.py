@@ -59,18 +59,22 @@ class DocumentRetriever:
         if not chunks:
             return []
 
-        embeddings = self.get_embedder().encode(chunks, normalize_embeddings=True)
+        chunk_texts = [chunk.text for chunk in chunks]
+        embeddings = self.get_embedder().encode(chunk_texts, normalize_embeddings=True)
         records = []
         for index, chunk in enumerate(chunks):
             records.append(
                 {
-                    "id": f"{path.name}::chunk::{index}",
+                    "id": f"{path.name}::chunk::{chunk.chunk_index}",
                     "embedding": embeddings[index].tolist(),
-                    "document": chunk,
+                    "document": chunk.text,
                     "metadata": {
                         "stored_name": path.name,
                         "display_name": get_display_filename(path.name),
-                        "chunk_index": index,
+                        "section_title": chunk.section_title,
+                        "chunk_index": chunk.chunk_index,
+                        "char_start": chunk.char_start,
+                        "char_end": chunk.char_end,
                         "source_kind": "document",
                     },
                 }
@@ -190,7 +194,11 @@ class DocumentRetriever:
             distance = distances[0][index] if distances and distances[0] else None
             score = convert_distance_to_score(distance)
             display_name = metadata.get("display_name") or metadata.get("stored_name") or "업로드 문서"
-            rendered_chunk = f"[{display_name}]\n{document_text}"
+            location = format_source_location(metadata)
+            rendered_chunk = f"[{display_name}]"
+            if location:
+                rendered_chunk = f"{rendered_chunk} {location}"
+            rendered_chunk = f"{rendered_chunk}\n{document_text}"
             matches.append(
                 {
                     "chunk": rendered_chunk,
@@ -199,6 +207,23 @@ class DocumentRetriever:
                 }
             )
         return matches
+
+
+def format_source_location(metadata):
+    section_title = metadata.get("section_title") or ""
+    chunk_index = metadata.get("chunk_index")
+    char_start = metadata.get("char_start")
+    char_end = metadata.get("char_end")
+
+    details = []
+    if section_title:
+        details.append(section_title)
+    if chunk_index is not None:
+        details.append(f"chunk {int(chunk_index) + 1}")
+    if char_start is not None and char_end is not None:
+        details.append(f"chars {int(char_start)}-{int(char_end)}")
+
+    return f"({' · '.join(details)})" if details else ""
 
 
 def convert_distance_to_score(distance):
@@ -211,13 +236,18 @@ def parse_rule_match(chunk_text, score):
     lines = chunk_text.splitlines()
     source = "기본 내규"
     excerpt = chunk_text
-    if lines and lines[0].startswith("[") and lines[0].endswith("]"):
-        source = lines[0][1:-1]
+    if lines and lines[0].startswith("["):
+        header_match = re.match(r"^\[([^\]]+)\]\s*(?:\((.*)\))?$", lines[0])
+        if not header_match:
+            header_match = re.match(r"^\[([^\]]+)\]", lines[0])
+        source = header_match.group(1) if header_match else lines[0][1:-1]
+        location = header_match.group(2) if header_match and header_match.lastindex and header_match.lastindex >= 2 else ""
         excerpt = "\n".join(lines[1:]).strip() or "(본문 없음)"
 
     return {
         "source": source,
         "score": round(score, 2),
+        "location": locals().get("location", ""),
         "excerpt": excerpt[:320].strip(),
     }
 

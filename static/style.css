@@ -308,7 +308,8 @@ textarea {
 }
 
 .doc-sub,
-.source-meta {
+.source-meta,
+.source-location {
     margin-top: 6px;
     color: var(--muted);
     font-size: 13px;
@@ -320,6 +321,11 @@ textarea {
 }
 
 .source-title {
+    font-weight: 700;
+}
+
+.source-location {
+    color: #4f7167;
     font-weight: 700;
 }
 

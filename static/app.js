@@ -265,6 +265,7 @@ function renderSources(elementId, sources) {
         <div class="source-card">
             <div class="source-title">${escapeHtml(source.source)}</div>
             <div class="source-meta">유사도 ${source.score.toFixed(2)}</div>
+            ${source.location ? `<div class="source-location">${escapeHtml(source.location)}</div>` : ""}
             <div class="source-excerpt">${escapeHtml(source.excerpt)}</div>
         </div>
     `).join("");
