@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,58 @@ except ImportError:  # pragma: no cover - optional dependency
 
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 UUID_PREFIX_PATTERN = re.compile(r"^[0-9a-f-]{36}_(.+)$")
+INDEX_STATUS_FILENAME = ".index_status.json"
+INDEX_STATUS_INDEXED = "indexed"
+INDEX_STATUS_FAILED = "failed"
+INDEX_STATUS_UNKNOWN = "unknown"
+
+
+def get_index_status_path(document_folder):
+    return document_folder / INDEX_STATUS_FILENAME
+
+
+def load_index_statuses(document_folder):
+    status_path = get_index_status_path(document_folder)
+    if not status_path.exists():
+        return {}
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_index_statuses(document_folder, statuses):
+    status_path = get_index_status_path(document_folder)
+    status_path.write_text(
+        json.dumps(statuses, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def set_document_index_status(document_folder, stored_name, status, error=""):
+    statuses = load_index_statuses(document_folder)
+    statuses[stored_name] = {
+        "status": status,
+        "error": str(error or ""),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_index_statuses(document_folder, statuses)
+
+
+def remove_document_index_status(document_folder, stored_name):
+    statuses = load_index_statuses(document_folder)
+    if stored_name in statuses:
+        statuses.pop(stored_name, None)
+        save_index_statuses(document_folder, statuses)
+
+
+def summarize_index_statuses(document_folder):
+    summary = {INDEX_STATUS_INDEXED: 0, INDEX_STATUS_FAILED: 0, INDEX_STATUS_UNKNOWN: 0}
+    for document in list_stored_documents(document_folder):
+        status = document.get("index_status") or INDEX_STATUS_UNKNOWN
+        summary[status] = summary.get(status, 0) + 1
+    return summary
 SECTION_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$")
 ARTICLE_HEADING_PATTERN = re.compile(r"^(제\s*\d+\s*조(?:의\s*\d+)?(?:\s*\([^)]*\))?(?:\s+.+)?|\d+\.\s+.+|-\s+.+)$")
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？다요함됨임음)])\s+")
@@ -242,6 +295,7 @@ def read_document_text(path):
 
 def list_stored_documents(document_folder):
     documents = []
+    index_statuses = load_index_statuses(document_folder)
     for path in sorted(document_folder.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
         if not path.is_file():
             continue
@@ -250,12 +304,16 @@ def list_stored_documents(document_folder):
 
         stat = path.stat()
         uploaded_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        index_status = index_statuses.get(path.name, {})
         documents.append(
             {
                 "stored_name": path.name,
                 "display_name": get_display_filename(path.name),
                 "size_bytes": stat.st_size,
                 "uploaded_at": uploaded_at.isoformat(),
+                "index_status": index_status.get("status", INDEX_STATUS_UNKNOWN),
+                "index_error": index_status.get("error", ""),
+                "index_updated_at": index_status.get("updated_at", ""),
             }
         )
     return documents
@@ -275,6 +333,7 @@ def get_document_path(document_folder, stored_name):
 def delete_document_file(document_folder, stored_name):
     target_path = get_document_path(document_folder, stored_name)
     target_path.unlink()
+    remove_document_index_status(document_folder, stored_name)
     return get_display_filename(target_path.name)
 
 

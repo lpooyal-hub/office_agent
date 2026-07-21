@@ -128,6 +128,26 @@ function renderDocumentLibrary(documents) {
 
     empty.style.display = "none";
     list.innerHTML = documents.map((doc) => {
+        const encodedStoredName = encodeURIComponent(doc.stored_name);
+        const indexStatus = doc.index_status || "unknown";
+        const isFailed = indexStatus === "failed";
+        const statusLabel = isFailed ? "색인 실패" : (indexStatus === "indexed" ? "색인 완료" : "색인 상태 확인 필요");
+        const errorText = isFailed && doc.index_error ? `<div class="doc-error">${escapeHtml(doc.index_error)}</div>` : "";
+        const retryButton = isFailed
+            ? `<button class="btn secondary" onclick="reindexDocument('${encodedStoredName}')">재색인</button>`
+            : "";
+
+        return `
+        <div class="doc-item ${isFailed ? "doc-failed" : ""}">
+            <div class="doc-header">
+                <div>
+                    <div class="doc-name">${escapeHtml(doc.display_name)}</div>
+                    <div class="doc-sub">${formatBytes(doc.size_bytes)} · ${formatDate(doc.uploaded_at)} · ${statusLabel}</div>
+                    ${errorText}
+                </div>
+                <div class="inline-actions">
+                    ${retryButton}
+                    <button class="btn secondary" onclick="deleteDocument('${encodedStoredName}')">삭제</button>
         const tags = (doc.tags || []).map((tag) => `<span class="doc-tag">${escapeHtml(tag)}</span>`).join("");
         const owner = doc.owner ? ` · 소유자: ${escapeHtml(doc.owner)}` : "";
         const indexedAt = doc.indexed_at ? ` · 색인: ${formatDate(doc.indexed_at)}` : "";
@@ -141,7 +161,6 @@ function renderDocumentLibrary(documents) {
                     </div>
                     <div class="doc-sub">${formatBytes(doc.size_bytes)} · ${escapeHtml(doc.content_type || "-")} · 업로드: ${formatDate(doc.uploaded_at)}${indexedAt}${owner}</div>
                 </div>
-                <button class="btn secondary" onclick="deleteDocument('${encodeURIComponent(doc.stored_name)}')">삭제</button>
             </div>
             ${doc.description ? `<div class="doc-description">${escapeHtml(doc.description)}</div>` : ""}
             ${tags ? `<div class="doc-tags">${tags}</div>` : ""}
@@ -208,6 +227,29 @@ async function uploadDocuments() {
     } finally {
         setLoading("docLoading", false);
         btn.disabled = false;
+    }
+}
+
+async function reindexDocument(encodedStoredName) {
+    const accessCode = getAccessCode();
+    if (!accessCode) return;
+
+    const formData = new FormData();
+    formData.append("access_code", accessCode);
+
+    try {
+        const response = await fetch(`/documents/${encodedStoredName}/reindex`, {
+            method: "POST",
+            body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "문서 재색인 실패");
+        renderDocumentLibrary(data.documents || []);
+        setAlert(data.message || "문서를 재색인했습니다.");
+    } catch (error) {
+        console.error(error);
+        setAlert(`문서 재색인 중 오류가 발생했습니다.\n${error.message}`);
+        loadDocumentLibrary();
     }
 }
 

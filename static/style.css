@@ -375,6 +375,14 @@ textarea {
     font-size: 13px;
 }
 
+.doc-failed {
+    border-color: #f2b8b5;
+    background: #fff7f6;
+}
+
+.doc-error {
+    margin-top: 8px;
+    color: #b42318;
 .source-meta span,
 .source-reason {
     border: 1px solid var(--info-line);
