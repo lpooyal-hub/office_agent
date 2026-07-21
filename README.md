@@ -148,6 +148,12 @@ pip install -r requirements.txt
 
 ### Environment
 
+프로젝트 루트의 `.env.example`을 복사해 `.env`를 만들고 값을 채웁니다.
+
+```bash
+cp .env.example .env
+```
+
 ```env
 OPENAI_API_KEY=your_api_key
 CHROMA_URL=http://localhost:9001
@@ -168,24 +174,66 @@ MAX_DOCUMENT_UPLOAD_MB=10
 MAX_SUMMARY_DOCUMENTS=5
 ```
 
-`.env.example` 파일을 참고해 `.env`를 생성합니다.
+- `OPENAI_API_KEY`와 `ACCESS_CODE`는 필수입니다.
+- `ACCESS_CODE=change_this_demo_password`는 예시값입니다. 실제 실행 전 반드시 고유한 값으로 변경해야 합니다.
+- `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW_SECONDS`, `MAX_AUDIO_UPLOAD_MB`, `MAX_DOCUMENT_UPLOAD_MB`, `MAX_SUMMARY_DOCUMENTS`, `CHROMA_TIMEOUT_SECONDS`는 정수여야 하며 1 이상이어야 합니다.
+- `/health`는 API 키, 접속 코드, Chroma 토큰 같은 민감정보의 원문을 노출하지 않고 설정 여부와 제한값만 반환합니다.
 
-`ACCESS_CODE`는 공개 데모 페이지에서 OpenAI API 비용이 발생하는 기능을 보호하기 위한 접속 코드입니다.
-Docker 환경에서는 `CHROMA_URL`을 `http://host.docker.internal:9001`로 두면, 현재 호스트에서 운영 중인 ChromaDB 컨테이너에 연결할 수 있습니다.
+### Local 실행
 
-### Start
+로컬 Python 프로세스에서 앱을 실행합니다. 같은 호스트에서 ChromaDB가 `9001` 포트로 떠 있다면 기본 `CHROMA_URL=http://localhost:9001`을 사용할 수 있습니다.
 
 ```bash
 python main.py
 ```
 
-### Docker
+서비스는 기본적으로 `http://localhost:5001`에서 실행됩니다.
+
+### Docker 실행
+
+Docker Compose는 `.env` 값을 컨테이너 환경변수로 전달합니다.
 
 ```bash
 docker compose up -d --build
 ```
 
-서비스는 기본적으로 `http://localhost:5001`에서 실행됩니다.
+Docker 컨테이너에서 호스트 머신의 ChromaDB에 연결하려면 다음처럼 설정합니다.
+
+```env
+CHROMA_URL=http://host.docker.internal:9001
+```
+
+### ChromaDB 연결 예시
+
+#### 1. 로컬 앱 → 로컬 ChromaDB
+
+```env
+CHROMA_URL=http://localhost:9001
+CHROMA_TENANT=default_tenant
+CHROMA_DATABASE=default_database
+CHROMA_COLLECTION=office_agent_documents
+CHROMA_TOKEN=
+```
+
+#### 2. Docker 앱 → 호스트 ChromaDB
+
+```env
+CHROMA_URL=http://host.docker.internal:9001
+CHROMA_TENANT=default_tenant
+CHROMA_DATABASE=default_database
+CHROMA_COLLECTION=office_agent_documents
+CHROMA_TOKEN=
+```
+
+#### 3. 인증 토큰이 필요한 원격 ChromaDB
+
+```env
+CHROMA_URL=https://your-chroma.example.com
+CHROMA_TENANT=default_tenant
+CHROMA_DATABASE=default_database
+CHROMA_COLLECTION=office_agent_documents
+CHROMA_TOKEN=your_chroma_token
+```
 
 ### Health Check
 

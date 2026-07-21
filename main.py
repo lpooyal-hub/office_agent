@@ -1,6 +1,7 @@
 import logging
 import os
 import secrets
+from dataclasses import dataclass
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -52,23 +53,126 @@ DOCUMENT_FOLDER.mkdir(exist_ok=True)
 STATIC_FOLDER.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jhgan/ko-sroberta-multitask")
-ACCESS_CODE = os.getenv("ACCESS_CODE", "")
-RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "20"))
-RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "3600"))
-MAX_AUDIO_UPLOAD_MB = int(os.getenv("MAX_AUDIO_UPLOAD_MB", "25"))
-MAX_DOCUMENT_UPLOAD_MB = int(os.getenv("MAX_DOCUMENT_UPLOAD_MB", "10"))
-MAX_SUMMARY_DOCUMENTS = int(os.getenv("MAX_SUMMARY_DOCUMENTS", "5"))
-CHROMA_URL = os.getenv("CHROMA_URL", "http://localhost:9001")
-CHROMA_TENANT = os.getenv("CHROMA_TENANT", "default_tenant")
-CHROMA_DATABASE = os.getenv("CHROMA_DATABASE", "default_database")
-CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "office_agent_documents")
-CHROMA_TIMEOUT_SECONDS = int(os.getenv("CHROMA_TIMEOUT_SECONDS", "15"))
-CHROMA_TOKEN = os.getenv("CHROMA_TOKEN", "")
+
+@dataclass(frozen=True)
+class Settings:
+    openai_api_key: str
+    openai_model: str
+    openai_stt_model: str
+    whisper_model: str
+    embedding_model: str
+    access_code: str
+    rate_limit_requests: int
+    rate_limit_window_seconds: int
+    max_audio_upload_mb: int
+    max_document_upload_mb: int
+    max_summary_documents: int
+    chroma_url: str
+    chroma_tenant: str
+    chroma_database: str
+    chroma_collection: str
+    chroma_timeout_seconds: int
+    chroma_token: str
+
+    @property
+    def chroma_auth_enabled(self):
+        return bool(self.chroma_token)
+
+    def health_status(self):
+        return {
+            "openai_api_key_configured": bool(self.openai_api_key),
+            "access_code_configured": bool(self.access_code),
+            "chroma_auth_configured": self.chroma_auth_enabled,
+            "rate_limit_requests": self.rate_limit_requests,
+            "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "max_audio_upload_mb": self.max_audio_upload_mb,
+            "max_document_upload_mb": self.max_document_upload_mb,
+            "max_summary_documents": self.max_summary_documents,
+        }
+
+
+def _get_required_env(name):
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} 환경변수가 설정되어 있지 않습니다.")
+    return value
+
+
+def _get_env(name, default):
+    raw_value = os.getenv(name)
+    value = default if raw_value is None else raw_value.strip()
+    if not value:
+        raise RuntimeError(f"{name} 환경변수가 비어 있습니다.")
+    return value
+
+
+def _get_int_env(name, default, minimum=1):
+    raw_value = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 환경변수는 정수여야 합니다: {raw_value!r}") from exc
+    if value < minimum:
+        raise RuntimeError(f"{name} 환경변수는 {minimum} 이상이어야 합니다: {value}")
+    return value
+
+
+def _reject_dangerous_default(name, value, dangerous_values):
+    if value in dangerous_values:
+        raise RuntimeError(
+            f"{name} 환경변수가 안전하지 않은 기본값입니다. 운영 전에 고유한 값으로 변경하세요."
+        )
+
+
+def load_settings():
+    openai_api_key = _get_required_env("OPENAI_API_KEY")
+    access_code = _get_required_env("ACCESS_CODE")
+    _reject_dangerous_default(
+        "ACCESS_CODE",
+        access_code,
+        {"change_this_demo_password", "password", "admin", "changeme", "change-me"},
+    )
+
+    return Settings(
+        openai_api_key=openai_api_key,
+        openai_model=_get_env("OPENAI_MODEL", "gpt-4o-mini"),
+        openai_stt_model=_get_env("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe"),
+        whisper_model=_get_env("WHISPER_MODEL", "base"),
+        embedding_model=_get_env("EMBEDDING_MODEL", "jhgan/ko-sroberta-multitask"),
+        access_code=access_code,
+        rate_limit_requests=_get_int_env("RATE_LIMIT_REQUESTS", 20),
+        rate_limit_window_seconds=_get_int_env("RATE_LIMIT_WINDOW_SECONDS", 3600),
+        max_audio_upload_mb=_get_int_env("MAX_AUDIO_UPLOAD_MB", 25),
+        max_document_upload_mb=_get_int_env("MAX_DOCUMENT_UPLOAD_MB", 10),
+        max_summary_documents=_get_int_env("MAX_SUMMARY_DOCUMENTS", 5),
+        chroma_url=_get_env("CHROMA_URL", "http://localhost:9001"),
+        chroma_tenant=_get_env("CHROMA_TENANT", "default_tenant"),
+        chroma_database=_get_env("CHROMA_DATABASE", "default_database"),
+        chroma_collection=_get_env("CHROMA_COLLECTION", "office_agent_documents"),
+        chroma_timeout_seconds=_get_int_env("CHROMA_TIMEOUT_SECONDS", 15),
+        chroma_token=os.getenv("CHROMA_TOKEN", "").strip(),
+    )
+
+
+settings = load_settings()
+
+OPENAI_API_KEY = settings.openai_api_key
+OPENAI_MODEL = settings.openai_model
+OPENAI_STT_MODEL = settings.openai_stt_model
+WHISPER_MODEL = settings.whisper_model
+EMBEDDING_MODEL = settings.embedding_model
+ACCESS_CODE = settings.access_code
+RATE_LIMIT_REQUESTS = settings.rate_limit_requests
+RATE_LIMIT_WINDOW_SECONDS = settings.rate_limit_window_seconds
+MAX_AUDIO_UPLOAD_MB = settings.max_audio_upload_mb
+MAX_DOCUMENT_UPLOAD_MB = settings.max_document_upload_mb
+MAX_SUMMARY_DOCUMENTS = settings.max_summary_documents
+CHROMA_URL = settings.chroma_url
+CHROMA_TENANT = settings.chroma_tenant
+CHROMA_DATABASE = settings.chroma_database
+CHROMA_COLLECTION = settings.chroma_collection
+CHROMA_TIMEOUT_SECONDS = settings.chroma_timeout_seconds
+CHROMA_TOKEN = settings.chroma_token
 
 DEFAULT_COMPANY_RULES = [
     "연차 휴가는 1년 미만 근로자의 경우 1개월 개근 시 1일이 발생하며, 총 11일 한도입니다.",
@@ -201,6 +305,7 @@ async def health():
         "document_chunks": retriever.get_rule_chunk_count(),
         "vector_store": "chroma",
         "chroma_collection": CHROMA_COLLECTION,
+        "settings": settings.health_status(),
     }
 
 
