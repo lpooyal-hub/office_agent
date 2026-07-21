@@ -1,6 +1,3 @@
-import requests
-
-
 def extract_response_text(data):
     if data.get("output_text"):
         return data["output_text"]
@@ -80,6 +77,8 @@ def build_policy_prompt(question, related_rules):
 
 
 def request_openai_response(api_key, model, prompt, max_output_tokens, timeout):
+    import requests
+
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 
@@ -118,6 +117,8 @@ def generate_policy_answer(api_key, model, question, related_rules):
 
 
 def transcribe_with_openai(api_key, model, file_path):
+    import requests
+
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
 
