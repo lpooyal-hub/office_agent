@@ -1,4 +1,7 @@
-import requests
+try:
+    import requests
+except ImportError:  # pragma: no cover - optional in prompt-only unit tests
+    requests = None
 
 
 def extract_response_text(data):
@@ -82,6 +85,8 @@ def build_policy_prompt(question, related_rules):
 def request_openai_response(api_key, model, prompt, max_output_tokens, timeout):
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
+    if requests is None:
+        raise RuntimeError("requests 패키지가 설치되어 있지 않습니다.")
 
     response = requests.post(
         "https://api.openai.com/v1/responses",
@@ -120,6 +125,8 @@ def generate_policy_answer(api_key, model, question, related_rules):
 def transcribe_with_openai(api_key, model, file_path):
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
+    if requests is None:
+        raise RuntimeError("requests 패키지가 설치되어 있지 않습니다.")
 
     with file_path.open("rb") as audio_file:
         response = requests.post(

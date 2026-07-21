@@ -254,6 +254,19 @@ async function summarizeDocuments() {
     }
 }
 
+function formatScore(value) {
+    const number = Number(value || 0);
+    return number.toFixed(2);
+}
+
+function describeSourceReason(source) {
+    const sourceKind = source.source_kind === "document" ? "업로드 문서" : "기본 내규";
+    const chunkLabel = source.chunk_index === null || source.chunk_index === undefined
+        ? "청크 정보 없음"
+        : `청크 #${source.chunk_index}`;
+    return `${sourceKind} · ${chunkLabel} · 의미 유사도와 질문 키워드 일치도를 합산해 선택`;
+}
+
 function renderSources(elementId, sources) {
     const container = document.getElementById(elementId);
     if (!sources || !sources.length) {
@@ -264,7 +277,12 @@ function renderSources(elementId, sources) {
     container.innerHTML = sources.map((source) => `
         <div class="source-card">
             <div class="source-title">${escapeHtml(source.source)}</div>
-            <div class="source-meta">유사도 ${source.score.toFixed(2)}</div>
+            <div class="source-meta">
+                <span>의미 ${formatScore(source.semantic_score ?? source.score)}</span>
+                <span>키워드 ${formatScore(source.lexical_score)}</span>
+                <span>순위 ${formatScore(source.rank_score)}</span>
+            </div>
+            <div class="source-reason">왜 선택됐나요? ${escapeHtml(describeSourceReason(source))}</div>
             <div class="source-excerpt">${escapeHtml(source.excerpt)}</div>
         </div>
     `).join("");

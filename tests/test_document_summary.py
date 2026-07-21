@@ -1,6 +1,6 @@
 import unittest
 
-from main import build_summary_prompt
+from services.ai_client import build_summary_prompt
 
 
 class DocumentSummaryPromptTests(unittest.TestCase):

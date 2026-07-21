@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - optional dependency
     whisper = None
 
 from services.ai_client import (
+    build_summary_prompt,
     generate_minutes,
     generate_policy_answer,
     summarize_document_text,
@@ -414,7 +415,7 @@ async def chat_policy(
         return {
             "answer": answer,
             "retrieved_rule": related_rules,
-            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+            "sources": [parse_rule_match(match) for match in matches],
         }
     except Exception as exc:
         logging.error("Chat error: %s", str(exc))
@@ -453,7 +454,7 @@ async def process_audio(
             "summary": summary,
             "retrieved_rule": related_rules,
             "stt_mode": stt_mode,
-            "sources": [parse_rule_match(chunk, score) for chunk, score in matches],
+            "sources": [parse_rule_match(match) for match in matches],
         }
 
     except Exception as exc:

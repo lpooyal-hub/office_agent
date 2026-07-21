@@ -2,7 +2,10 @@ import logging
 import re
 from threading import RLock
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - optional dependency for lightweight tests
+    np = None
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -133,33 +136,28 @@ class DocumentRetriever:
         if not combined_matches:
             return "관련된 내규를 찾을 수 없습니다.", []
 
-        lexical_scores = get_lexical_scores(query, [item["chunk"] for item in combined_matches])
-        for index, lexical_score in enumerate(lexical_scores):
-            combined_matches[index]["rank_score"] = combined_matches[index]["score"] + float(lexical_score)
-
-        ranked_matches = sorted(
-            combined_matches,
-            key=lambda item: item["rank_score"],
-            reverse=True,
-        )
+        ranked_matches = rank_matches(query, combined_matches)
 
         selected = []
         for match in ranked_matches:
-            if match["score"] >= threshold or not selected:
-                selected.append((match["chunk"], match["score"]))
+            if match["semantic_score"] >= threshold or not selected:
+                selected.append(match)
             if len(selected) >= top_k:
                 break
 
         rendered = "\n\n".join(
-            f"- {document}\n  유사도: {score:.2f}" for document, score in selected
+            f"- {match['chunk']}\n  유사도: {match['semantic_score']:.2f} / "
+            f"키워드: {match['lexical_score']:.2f} / 순위점수: {match['rank_score']:.2f}"
+            for match in selected
         )
         return rendered, selected
 
     def get_default_rule_matches(self, query_embedding, query, limit=5):
         default_rule_embeddings = self.get_default_rule_embeddings()
-        similarities = np.dot(default_rule_embeddings, query_embedding)
+        similarities = dot_similarities(default_rule_embeddings, query_embedding)
         lexical_scores = get_lexical_scores(query, self._default_rule_chunks)
-        ranked_indexes = np.argsort(similarities + lexical_scores)[::-1][:limit]
+        ranking_scores = [similarities[index] + lexical_scores[index] for index in range(len(similarities))]
+        ranked_indexes = sorted(range(len(ranking_scores)), key=lambda index: ranking_scores[index], reverse=True)[:limit]
 
         matches = []
         for index in ranked_indexes:
@@ -167,8 +165,12 @@ class DocumentRetriever:
             matches.append(
                 {
                     "chunk": chunk,
+                    "semantic_score": float(similarities[index]),
                     "score": float(similarities[index]),
+                    "lexical_score": 0.0,
                     "rank_score": float(similarities[index]),
+                    "source_kind": "default_rule",
+                    "chunk_index": int(index),
                 }
             )
         return matches
@@ -194,11 +196,46 @@ class DocumentRetriever:
             matches.append(
                 {
                     "chunk": rendered_chunk,
+                    "semantic_score": score,
                     "score": score,
+                    "lexical_score": 0.0,
                     "rank_score": score,
+                    "source_kind": metadata.get("source_kind") or "document",
+                    "chunk_index": metadata.get("chunk_index"),
                 }
             )
         return matches
+
+
+def dot_similarities(embeddings, query_embedding):
+    if np is not None:
+        return np.dot(embeddings, query_embedding)
+    return [
+        sum(float(value) * float(query_embedding[index]) for index, value in enumerate(embedding))
+        for embedding in embeddings
+    ]
+
+
+def rank_matches(query, semantic_matches):
+    """Return matches sorted by combined semantic and lexical relevance score."""
+    if not semantic_matches:
+        return []
+
+    ranked = []
+    lexical_scores = get_lexical_scores(query, [item.get("chunk", "") for item in semantic_matches])
+    for index, match in enumerate(semantic_matches):
+        semantic_score = float(match.get("semantic_score", match.get("score", 0.0)) or 0.0)
+        lexical_score = float(lexical_scores[index])
+        enriched = dict(match)
+        enriched["semantic_score"] = semantic_score
+        enriched["score"] = semantic_score
+        enriched["lexical_score"] = lexical_score
+        enriched["rank_score"] = semantic_score + lexical_score
+        enriched.setdefault("source_kind", "default_rule")
+        enriched.setdefault("chunk_index", None)
+        ranked.append(enriched)
+
+    return sorted(ranked, key=lambda item: item["rank_score"], reverse=True)
 
 
 def convert_distance_to_score(distance):
@@ -207,7 +244,22 @@ def convert_distance_to_score(distance):
     return max(0.0, 1.0 - float(distance))
 
 
-def parse_rule_match(chunk_text, score):
+def parse_rule_match(match, score=None):
+    if isinstance(match, dict):
+        chunk_text = match.get("chunk", "")
+        semantic_score = float(match.get("semantic_score", match.get("score", score or 0.0)) or 0.0)
+        lexical_score = float(match.get("lexical_score", 0.0) or 0.0)
+        rank_score = float(match.get("rank_score", semantic_score + lexical_score) or 0.0)
+        source_kind = match.get("source_kind") or "default_rule"
+        chunk_index = match.get("chunk_index")
+    else:
+        chunk_text = match
+        semantic_score = float(score or 0.0)
+        lexical_score = 0.0
+        rank_score = semantic_score
+        source_kind = "default_rule"
+        chunk_index = None
+
     lines = chunk_text.splitlines()
     source = "기본 내규"
     excerpt = chunk_text
@@ -217,7 +269,12 @@ def parse_rule_match(chunk_text, score):
 
     return {
         "source": source,
-        "score": round(score, 2),
+        "score": round(semantic_score, 2),
+        "semantic_score": round(semantic_score, 4),
+        "lexical_score": round(lexical_score, 4),
+        "rank_score": round(rank_score, 4),
+        "source_kind": source_kind,
+        "chunk_index": chunk_index,
         "excerpt": excerpt[:320].strip(),
     }
 
@@ -225,14 +282,14 @@ def parse_rule_match(chunk_text, score):
 def get_lexical_scores(query, chunks):
     keywords = expand_query_terms(query)
     if not keywords:
-        return np.zeros(len(chunks))
+        return np.zeros(len(chunks)) if np is not None else [0.0] * len(chunks)
 
     scores = []
     for chunk in chunks:
         lowered = chunk.lower()
         matched = sum(1 for keyword in keywords if keyword in lowered)
         scores.append(min(matched * 0.35, 1.05))
-    return np.array(scores)
+    return np.array(scores) if np is not None else scores
 
 
 def expand_query_terms(query):
