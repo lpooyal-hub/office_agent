@@ -195,6 +195,18 @@ Docker 환경에서는 `CHROMA_URL`을 `http://host.docker.internal:9001`로 두
 python main.py
 ```
 
+### Test
+
+```bash
+python -m unittest tests/test_document_summary.py
+```
+
+또는 `pytest`를 사용하는 경우 다음 명령으로 실행할 수 있습니다.
+
+```bash
+pytest
+```
+
 ### Docker
 
 ```bash
